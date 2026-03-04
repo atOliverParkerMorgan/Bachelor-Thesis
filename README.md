@@ -1,0 +1,290 @@
+# BP
+
+Utilities for converting DICOM/IMA series to PNG slices (with geometry metadata) and back to 3D NIfTI.
+
+## Project structure
+
+- [src/preprocessing/conversion/ima2png.py](src/preprocessing/conversion/ima2png.py) — DICOM/IMA → PNG slices + geometry.json
+- [src/preprocessing/conversion/png2ima.py](src/preprocessing/conversion/png2ima.py) — PNG slices + geometry.json → .nii.gz
+- [src/preprocessing/conversion/mask2datumaro.py](src/preprocessing/conversion/mask2datumaro.py) — Segmentation masks → Datumaro format
+- [src/preprocessing/segmentation/segmentation.py](src/preprocessing/segmentation/segmentation.py) — Wood defect segmentation
+- [src/preprocessing/segmentation/config/](src/preprocessing/segmentation/config/) — Per-series segmentation configs
+- [run](run) — Full automated pipeline script
+- [src/ground_truth](src/ground_truth) — Sample input data (IMA files)
+
+## Requirements
+
+- Python 3.10+
+- Poetry
+
+## Install
+
+```bash
+poetry install
+```
+
+## Quick Start
+
+Run the full automated pipeline on your data:
+
+```bash
+./run
+```
+
+Or with custom options:
+
+```bash
+./run --masks kura,suk --skip-extract
+```
+
+## Usage
+
+Convert DICOM/IMA series to PNG (mirrors input folder structure):
+
+```bash
+poetry run python src/preprocessing/conversion/ima2png.py \
+	--input src/ground_truth \
+	--output src/png
+```
+
+If the script is executable, you can also run:
+
+```bash
+poetry run src/preprocessing/conversion/ima2png.py \
+	--input src/ground_truth \
+	--output src/png
+```
+
+Convert PNG back to NIfTI:
+
+```bash
+poetry run python src/preprocessing/conversion/png2ima.py \
+	--input src/png \
+	--output src/output
+```
+
+Generate segmentation masks for wood defects:
+
+```bash
+poetry run python src/preprocessing/segmentation/segmentation.py \
+	--input src/png/dub1 \
+	--output src/output/dub1
+```
+
+**Selective Mask Generation:**
+
+Generate only specific masks (saves processing time):
+
+```bash
+# Generate only bark and background
+poetry run python src/preprocessing/segmentation/segmentation.py \
+	--input src/png/dub1 \
+	--output src/output/dub1 \
+	--masks kura pozadi
+
+# Generate only cracks
+poetry run python src/preprocessing/segmentation/segmentation.py \
+	--input src/png/dub1 \
+	--output src/output/dub1 \
+	--masks trhlina
+```
+
+**Using Config Files:**
+
+You can pass a config file to customize segmentation parameters:
+
+```bash
+poetry run python src/preprocessing/segmentation/segmentation.py \
+	--config dub1 \
+	--input src/png/dub1 \
+	--output src/output/dub1
+```
+
+**Output Masks:**
+
+The segmentation generates 5 mask types:
+
+- `pozadi/` — Background (non-wood areas)
+- `kura/` — Bark/crust (outer layer)
+- `suk/` — Knots (bright circular regions)
+- `hniloba/` — Decay/rot (within knot regions)
+- `trhlina/` — Cracks (elongated linear defects detected via gradient analysis)
+
+All masks use binary format: 255 for detected features, 0 for background.
+
+**Convert Masks to Datumaro Format:**
+
+Convert segmentation masks to Datumaro format for use with CVAT or other annotation tools:
+
+```bash
+poetry run python src/preprocessing/conversion/mask2datumaro.py \
+	--segmentation-output src/output/dub1 \
+	--output src/output/datumaro_dub1.zip \
+	--task-name dub1
+```
+
+The script automatically detects which masks are available and handles partial mask sets.
+
+## Full Pipeline
+
+Use the `run` script to execute the complete pipeline automatically:
+
+```bash
+# Run full pipeline (extract → convert → segment → export)
+./run
+
+# Generate only specific masks
+./run --masks kura,pozadi
+
+# Skip extraction and conversion if files already exist
+./run --skip-extract --skip-convert
+
+# Enable CVAT upload (requires CVAT_TOKEN and CVAT_PROJECT_ID in .env)
+./run --upload
+
+# Combined example
+./run --masks trhlina,suk --skip-extract --upload
+
+# Useful
+./run --skip-extract --skip-convert --upload --masks pozadi  
+```
+
+**Pipeline Options:**
+
+- `--masks, -m MASKS` — Masks to generate (comma-separated: pozadi,kura,suk,hniloba,trhlina or 'all')
+- `--skip-extract` — Skip extraction if PNG files already exist
+- `--skip-convert` — Skip IMA→PNG conversion for existing files
+- `--upload` — Upload results to CVAT (requires credentials)
+- `-h, --help` — Show help message
+
+The pipeline automatically:
+1. Extracts IMA files from zip archives
+2. Converts IMA to PNG format
+3. Runs segmentation with specified masks
+4. Exports to Datumaro format
+5. Optionally uploads to CVAT
+
+## Configuration
+
+**Environment Variables:**
+
+For CVAT upload support, create a `.env` file in the project root:
+
+```bash
+CVAT_TOKEN=your_api_token_here
+CVAT_PROJECT_ID=your_project_id
+CVAT_ORGANIZATION=BP
+
+# Optional upload tuning (defaults shown)
+CVAT_MAX_CHUNK_MB=180
+CVAT_UPLOAD_ATTEMPTS=5
+CVAT_CONNECT_TIMEOUT=30
+CVAT_READ_TIMEOUT=1800
+```
+
+Then use `./run --upload` to automatically upload results.
+
+**Segmentation Configs:**
+
+Per-series configuration files are in [src/preprocessing/segmentation/config/](src/preprocessing/segmentation/config/):
+- `dub1.config`, `dub2.config`, `dub3.config`, `dub4.config` — Series-specific parameters
+- `optimized.config` — Baseline optimized parameters
+
+Example config structure:
+```ini
+[segmentation]
+# Log extraction
+min_log_area = 127000
+log_close_kernel_size = 0
+
+# Bark segmentation
+crust_alpha = 1.45
+crust_beta = -50
+crust_wood_thresh = 220
+
+# Crack detection
+crack_threshold = 109
+crack_max_aspect_ratio = 0.5
+crack_max_roundness = 0.9
+```
+
+Optional: convert a single series folder or a single file:
+
+```bash
+poetry run python src/preprocessing/conversion/ima2png.py --target src/ground_truth/dub1
+```
+
+## Examples
+
+**Example 1: Process new data with default settings**
+```bash
+# Place your .zip files in src/ground_truth/
+./run
+```
+
+**Example 2: Reprocess with different masks**
+```bash
+# Already have PNGs, just regenerate specific masks
+./run --skip-extract --skip-convert --masks trhlina,hniloba
+```
+
+**Example 3: Quick crack-only analysis**
+```bash
+# Skip all preprocessing, generate only crack masks
+./run --skip-extract --skip-convert --masks trhlina
+```
+
+**Example 4: Full pipeline with upload**
+```bash
+# Process and upload to CVAT
+./run --upload
+```
+
+**Example 5: Custom segmentation parameters**
+```bash
+# Use optimized config for a specific series
+poetry run python src/preprocessing/segmentation/segmentation.py \
+	--config optimized \
+	--input src/png/dub2 \
+	--output src/output/dub2 \
+	--masks all
+```
+
+**Example 6: Upload to cvat**
+```bash
+ poetry run python src/preprocessing/upload_to_cvat.py
+```
+
+## Notes
+
+- Output PNGs are stored under task folders (e.g., subset1, subset2) to keep large series manageable
+- Geometry metadata is saved as geometry.json at the series root
+- Segmentation supports selective mask generation to optimize processing time
+- Crack detection uses gradient-based analysis with geometric descriptor filtering
+- Config files allow per-series parameter tuning (see [config/](src/preprocessing/segmentation/config/))
+- The pipeline intelligently skips steps when output already exists
+- Datumaro export automatically handles partial mask sets
+
+## Segmentation Features
+
+**Mask Types:**
+1. **pozadi** (Background) — Non-wood areas, including the central hole
+2. **kura** (Bark) — Outer crust layer detected via contrast enhancement
+3. **suk** (Knots) — Bright circular regions in inner wood
+4. **hniloba** (Decay) — Dark rot areas within knots
+5. **trhlina** (Cracks) — Linear defects detected via Sobel gradient analysis
+
+**Key Algorithms:**
+- Log extraction using Otsu thresholding
+- Bark segmentation via contrast enhancement and morphological operations
+- Knot detection using intensity thresholding with Gaussian smoothing
+- Crack detection using gradient magnitude analysis with shape filtering
+- Decay detection using two-threshold segmentation within knot regions
+
+**Configurable Parameters:**
+
+Each mask type has tunable parameters in config files:
+- Threshold values for intensity-based segmentation
+- Kernel sizes for morphological operations
+- Minimum area filters for noise removal
+- Aspect ratio and roundness thresholds for shape classification

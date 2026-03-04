@@ -1,0 +1,30 @@
+[tool.poetry]
+name = "ima-to-png-converter"
+version = "0.1.0"
+description = "Convert IMA medical imaging files to PNG format"
+authors = ["Your Name <you@example.com>"]
+readme = "README.md"
+package-mode = false
+
+[tool.poetry.dependencies]
+python = "^3.10"
+pydicom = "^2.4"
+Pillow = "^10.0"
+numpy = "<2"
+SimpleITK = "^2.3"
+improutils = "^1.2.1"
+tqdm = "^4.66"
+pycocotools = "^2.0.11"
+datumaro = "^1.12.0"
+requests = "^2.31"
+python-dotenv = "^1.0"
+dotenv = "^0.9.9"
+requests-toolbelt = "^1.0.0"
+cvat-sdk = "^2.57.0"
+
+[tool.poetry.group.dev.dependencies]
+ipykernel = "^7.2.0"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
