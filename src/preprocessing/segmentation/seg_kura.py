@@ -72,6 +72,8 @@ def segment_crust(
     crust_add_kernel_size,
     crust_max_edge_distance_ratio,
     crust_max_edge_distance_px,
+    crust_edge_threshold,
+    crust_wood_close_iterations,
 ):
     """Isolate outer bark (kura) using threshold and edge-driven extension."""
     enhanced = cv2.convertScaleAbs(img, alpha=alpha, beta=beta)
@@ -81,7 +83,13 @@ def segment_crust(
     _, thresh_wood = cv2.threshold(gray_masked, wood_thresh, 255, cv2.THRESH_BINARY)
 
     close_kernel = np.ones((wood_close_kernel_size, wood_close_kernel_size), np.uint8)
-    wood_closed = cv2.morphologyEx(thresh_wood, cv2.MORPH_CLOSE, close_kernel, iterations=2)
+    wood_close_iterations = max(1, int(crust_wood_close_iterations))
+    wood_closed = cv2.morphologyEx(
+        thresh_wood,
+        cv2.MORPH_CLOSE,
+        close_kernel,
+        iterations=wood_close_iterations,
+    )
 
     solid_wood_mask = np.zeros_like(thresh_wood)
     contours, _ = cv2.findContours(wood_closed, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
@@ -116,7 +124,7 @@ def segment_crust(
             cv2.NORM_MINMAX,
             dtype=cv2.CV_8U,
         )
-        edge_mask = iu.segmentation_one_threshold(gradient_norm, 150)
+        edge_mask = iu.segmentation_one_threshold(gradient_norm, int(crust_edge_threshold))
         edge_contours_mask, _, _ = iu.find_contours(edge_mask, min_area=0, fill=False)
 
         if crust_add_kernel_size and crust_add_kernel_size > 1:

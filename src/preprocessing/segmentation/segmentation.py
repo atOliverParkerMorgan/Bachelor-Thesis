@@ -4,22 +4,13 @@ import cv2
 from tqdm import tqdm
 import improutils as iu
 
-try:
-    from .seg_common import fourier_bandpass_filter, normalize_dataset_intensity
-    from .seg_hniloba import segment_decay_in_knots
-    from .seg_trhlina import segment_cracks
-    from .seg_log import extract_log_mask
-    from .seg_kura import segment_crust
-    from .seg_suk import segment_suk
-    from .seg_pozadi import segment_background
-except ImportError:
-    from seg_common import fourier_bandpass_filter, normalize_dataset_intensity
-    from seg_hniloba import segment_decay_in_knots
-    from seg_trhlina import segment_cracks
-    from seg_log import extract_log_mask
-    from seg_kura import segment_crust
-    from seg_suk import segment_suk
-    from seg_pozadi import segment_background
+from .seg_common import fourier_bandpass_filter, normalize_dataset_intensity
+from .seg_trhlina_and_hniloba import segment_trhlina_and_hniloba
+from .seg_config import DEFAULT_CONFIG
+from .seg_log import extract_log_mask
+from .seg_kura import segment_crust
+from .seg_suk import segment_suk
+from .seg_pozadi import segment_background
 
 
 # --- Processing Pipeline ---
@@ -72,6 +63,8 @@ def build_masks(img, config, requested_masks=None):
             config["crust_add_kernel_size"],
             config["crust_max_edge_distance_ratio"],
             config["crust_max_edge_distance_px"],
+            config["crust_edge_threshold"],
+            config["crust_wood_close_iterations"],
         )
         inner_log_mask = cv2.subtract(log_mask, crust_mask)
         if 'kura' in requested_masks:
@@ -111,34 +104,24 @@ def build_masks(img, config, requested_masks=None):
         freq_filtered_log = cv2.cvtColor(filtered_gray, cv2.COLOR_GRAY2BGR)
         freq_filtered_log = iu.apply_mask(freq_filtered_log, log_mask)
 
-    # Generate decay (hniloba)
-    if 'hniloba' in requested_masks and knot_mask is not None:
-        hniloba_input = freq_filtered_log if freq_filtered_log is not None else normalized_log
-        decay_mask = segment_decay_in_knots(
-            hniloba_input,
-            knot_mask,
-            min_area=config["hniloba_min_area"],
-            lower_threshold=config["hniloba_lower_threshold"],
-            upper_threshold=config["hniloba_upper_threshold"],
-        )
-        results['hniloba'] = decay_mask
-    
-    # Generate cracks (trhlina)
-    if 'trhlina' in requested_masks and inner_log_mask is not None:
+    # Generate cracks/decay from shared contour candidates split by roundness boundary.
+    if ('trhlina' in requested_masks or 'hniloba' in requested_masks) and inner_log_mask is not None:
         crack_source = freq_filtered_log if freq_filtered_log is not None else normalized_log
         inner_log_img = iu.apply_mask(crack_source, inner_log_mask)
-        crack_mask = segment_cracks(
+        crack_mask, decay_mask = segment_trhlina_and_hniloba(
             inner_log_img,
-            crust_mask,
-            config["crack_threshold"],
-            config["crack_edge_exclude_kernel"],
-            config["crack_crust_exclude_kernel"],
+            knot_mask,
             config["crack_min_area"],
             config["crack_max_aspect_ratio"],
-            config["crack_max_roundness"],
-            config["crack_gauss_kernel_size"],
+            config["trhlina_hniloba_roundness_boundary"],
+            crack_threshold=config["crack_threshold"],
+            hniloba_min_area=config["hniloba_min_area"],
+            restrict_hniloba_to_knot=config["restrict_hniloba_to_suk"],
         )
-        results['trhlina'] = crack_mask
+        if 'trhlina' in requested_masks:
+            results['trhlina'] = crack_mask
+        if 'hniloba' in requested_masks:
+            results['hniloba'] = decay_mask
     
     # Generate background (pozadi)
     if 'pozadi' in requested_masks:
@@ -150,38 +133,6 @@ def build_masks(img, config, requested_masks=None):
         results['pozadi'] = background_mask
     
     return results
-
-
-DEFAULT_CONFIG = {
-    "min_log_area": 127_000,
-    "log_close_kernel_size": 0,
-    "crust_alpha": 1.45,
-    "crust_beta": -50,
-    "crust_wood_thresh": 220,
-    "crust_wood_close_kernel_size": 7,
-    "crust_connect_kernel_size": 5,
-    "crust_sobel_kernel_size": 7,
-    "crust_add_kernel_size": 8,
-    "crust_max_edge_distance_ratio": 0.22,
-    "crust_max_edge_distance_px": 0,
-    "bg_close_kernel_size": 21,
-    "suk_intensity_threshold": 220,
-    "suk_min_area": 250,
-    "suk_gauss_kernel_size": 5,
-    "hniloba_min_area": 0,
-    "hniloba_lower_threshold": 70,
-    "hniloba_upper_threshold": 255,
-    "gamma_correction": 1.2,
-    "fft_min_freq": 25,
-    "fft_max_freq": 20,
-    "crack_threshold": 109,
-    "crack_edge_exclude_kernel": 16,
-    "crack_crust_exclude_kernel": 7,
-    "crack_min_area": 8,
-    "crack_max_aspect_ratio": 0.5,
-    "crack_max_roundness": 0.9,
-    "crack_gauss_kernel_size": 7,
-}
 
 
 def build_parser(defaults):
@@ -216,6 +167,11 @@ def build_parser(defaults):
         default=defaults["crust_wood_close_kernel_size"],
     )
     parser.add_argument(
+        "--crust-wood-close-iterations",
+        type=int,
+        default=defaults["crust_wood_close_iterations"],
+    )
+    parser.add_argument(
         "--crust-connect-kernel-size",
         type=int,
         default=defaults["crust_connect_kernel_size"],
@@ -229,6 +185,11 @@ def build_parser(defaults):
         "--crust-add-kernel-size",
         type=int,
         default=defaults["crust_add_kernel_size"],
+    )
+    parser.add_argument(
+        "--crust-edge-threshold",
+        type=int,
+        default=defaults["crust_edge_threshold"],
     )
     parser.add_argument(
         "--crust-max-edge-distance-ratio",
@@ -264,16 +225,6 @@ def build_parser(defaults):
         "--hniloba-min-area",
         type=int,
         default=defaults["hniloba_min_area"],
-    )
-    parser.add_argument(
-        "--hniloba-lower-threshold",
-        type=int,
-        default=defaults["hniloba_lower_threshold"],
-    )
-    parser.add_argument(
-        "--hniloba-upper-threshold",
-        type=int,
-        default=defaults["hniloba_upper_threshold"],
     )
     parser.add_argument(
         "--gamma-correction",
@@ -325,14 +276,35 @@ def build_parser(defaults):
         default=defaults["crack_max_aspect_ratio"],
     )
     parser.add_argument(
-        "--crack-max-roundness",
+        "--trhlina-hniloba-roundness-boundary",
         type=float,
-        default=defaults["crack_max_roundness"],
+        default=defaults["trhlina_hniloba_roundness_boundary"],
+        help="Contours with roundness <= boundary are trhlina, > boundary are hniloba.",
     )
     parser.add_argument(
-        "--crack-gauss-kernel-size",
-        type=int,
-        default=defaults["crack_gauss_kernel_size"],
+        "--crack-max-roundness",
+        type=float,
+        dest="trhlina_hniloba_roundness_boundary",
+        help=argparse.SUPPRESS,
+    )
+    parser.add_argument(
+        "--debug-plots",
+        action="store_true",
+        default=defaults["debug_plots"],
+        help="Show intermediate debug plots for segmentation stages.",
+    )
+    parser.add_argument(
+        "--restrict-hniloba-to-suk",
+        dest="restrict_hniloba_to_suk",
+        action="store_true",
+        default=defaults["restrict_hniloba_to_suk"],
+        help="Restrict hniloba mask to detected suk regions.",
+    )
+    parser.add_argument(
+        "--no-restrict-hniloba-to-suk",
+        dest="restrict_hniloba_to_suk",
+        action="store_false",
+        help="Allow hniloba outside suk regions.",
     )
     return parser
 
@@ -354,15 +326,21 @@ def main():
     config["log_close_kernel_size"] |= 1
     config["suk_gauss_kernel_size"] |= 1
     config["crust_wood_close_kernel_size"] |= 1
+    config["crust_wood_close_iterations"] = max(1, int(config["crust_wood_close_iterations"]))
     config["crust_connect_kernel_size"] |= 1
     config["crust_add_kernel_size"] = max(1, config["crust_add_kernel_size"])
     config["crust_sobel_kernel_size"] |= 1
+    config["crust_edge_threshold"] = max(0, min(255, int(config["crust_edge_threshold"])))
     config["crack_edge_exclude_kernel"] |= 1
     config["crack_crust_exclude_kernel"] |= 1
-    config["crack_gauss_kernel_size"] |= 1
+    config["crack_threshold"] = max(0, min(255, int(config["crack_threshold"])))
     config["fft_min_freq"] = max(0, int(config["fft_min_freq"]))
     config["fft_max_freq"] = max(0, int(config["fft_max_freq"]))
     config["gamma_correction"] = max(0.1, float(config["gamma_correction"]))
+    config["trhlina_hniloba_roundness_boundary"] = min(
+        1.0,
+        max(0.0, float(config["trhlina_hniloba_roundness_boundary"])),
+    )
     
     # Determine which masks to generate
     if "all" in args.masks:
@@ -376,7 +354,8 @@ def main():
         try:
             img = iu.load_image(str(f_path))
             mask_dict = build_masks(img, config, requested_masks)
-        except Exception:
+        except Exception as exc:
+            tqdm.write(f"[WARN] Failed to process {f_path}: {exc}")
             continue
 
         if not mask_dict:
