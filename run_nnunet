@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# nnU-Net v2 helper script (3D-first defaults)
+# Usage examples:
+#   ./run_nnunet prepare --overwrite
+#   ./run_nnunet plan
+#   ./run_nnunet train --fold 0
+#   ./run_nnunet all --overwrite --fold 0
+
+if [ $# -eq 0 ]; then
+    echo "Usage: $0 <prepare|plan|train|predict|all> [args...]"
+    exit 1
+fi
+
+START_TS=$(date +%s)
+echo "[run_nnunet] Starting: $*"
+
+poetry run python src/nn_unet/pipeline.py "$@"
+
+END_TS=$(date +%s)
+ELAPSED=$((END_TS - START_TS))
+echo "[run_nnunet] Finished in ${ELAPSED}s"

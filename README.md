@@ -16,12 +16,15 @@ Utilities for converting DICOM/IMA series to PNG slices (with geometry metadata)
 
 - Python 3.10+
 - Poetry
+- (For training) PyTorch build matching your CPU/CUDA setup
 
 ## Install
 
 ```bash
 poetry install
 ```
+
+If you need a specific PyTorch build (recommended for GPU training), install it after `poetry install`.
 
 ## Quick Start
 
@@ -258,6 +261,75 @@ poetry run python src/preprocessing/segmentation/segmentation.py \
 ## Notes
 
 - Output PNGs are stored under task folders (e.g., subset1, subset2) to keep large series manageable
+
+## nnU-Net v2 (3D) Integration
+
+This repository now includes a dedicated nnU-Net pipeline under `src/nn_unet/` with defaults tuned for `3d_fullres`.
+
+### Layout
+
+- `src/nn_unet/prepare_dataset001.py` - converts `src/nn_UNet/Dataset001/dub*` slices into nnU-Net raw NIfTI volumes
+- `src/nn_unet/pipeline.py` - wrappers for prepare, plan/preprocess, train, and predict
+- `run_nnunet` - convenience launcher (`poetry run python src/nn_unet/pipeline.py ...`)
+
+Prepared nnU-Net data will be stored in:
+
+- `src/nn_unet/nnunet_data/nnUNet_raw/`
+- `src/nn_unet/nnunet_data/nnUNet_preprocessed/`
+- `src/nn_unet/nnunet_data/nnUNet_results/`
+
+### Train on Dataset001 (3D)
+
+Prepare dataset from `Dataset001`:
+
+```bash
+./run_nnunet prepare --overwrite
+```
+
+Plan and preprocess:
+
+```bash
+./run_nnunet plan --verify-dataset-integrity
+```
+
+If preprocessing runs out of RAM, limit configs and worker processes:
+
+```bash
+./run_nnunet plan --configurations 3d_lowres --num-processes 1
+```
+
+Train fold 0 using 3D full resolution (default configuration):
+
+```bash
+./run_nnunet train --fold 0
+```
+
+Or run all three steps in one command:
+
+```bash
+./run_nnunet all --overwrite --fold 0
+```
+
+Low-memory variant (preprocess only selected config with a single worker):
+
+```bash
+./run_nnunet all --overwrite --fold 0 --plan-configurations 3d_lowres --plan-num-processes 1
+```
+
+### Predict
+
+Inference expects nnU-Net style input files named like `case_0000.nii.gz` in an input folder.
+
+```bash
+./run_nnunet predict --input path/to/imagesTs --output path/to/predictions --fold 0
+```
+
+### Notes about Dataset001 conversion
+
+- One 3D case is generated per folder (`dub1`, `dub5`, `dub11`, ...)
+- Source images are read from `SegmentationObject/*.png`
+- Labels are read from `SegmentationClass/*.png` and converted from RGB colors via `labelmap.txt`
+- Voxel spacing is loaded from `src/png/<series>/geometry.json` when available
 - Geometry metadata is saved as geometry.json at the series root
 - Segmentation supports selective mask generation to optimize processing time
 - Crack detection uses gradient-based analysis with geometric descriptor filtering
