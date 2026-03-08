@@ -10,7 +10,25 @@ import shutil
 import subprocess
 import time
 from pathlib import Path
-from typing import Dict, List
+from typing import Dict, List, Tuple
+
+
+RESENC_CITATION = (
+    "Isensee, F.*, Wald, T.*, Ulrich, C.*, Baumgartner, M.*, Roy, S., "
+    "Maier-Hein, K., Jaeger, P. (2024). nnU-Net Revisited: A Call for Rigorous "
+    "Validation in 3D Medical Image Segmentation. arXiv:2404.09556"
+)
+
+
+def planner_from_preset(preset: str) -> str:
+    mapping = {
+        "M": "nnUNetPlannerResEncM",
+        "L": "nnUNetPlannerResEncL",
+        "XL": "nnUNetPlannerResEncXL",
+    }
+    if preset not in mapping:
+        raise ValueError(f"Unsupported ResEnc preset: {preset}")
+    return mapping[preset]
 
 
 def ensure_env(nnunet_root: Path) -> Dict[str, str]:
@@ -163,10 +181,110 @@ def default_plans_identifier_for_planner(planner: str) -> str:
     return mapping.get(planner, "nnUNetPlans")
 
 
+def planner_and_plans_from_args(
+    preset: str | None,
+    planner: str | None,
+    explicit_plans_identifier: str | None,
+) -> Tuple[str, str]:
+    if planner:
+        selected_planner = planner
+    elif preset:
+        selected_planner = planner_from_preset(preset)
+    else:
+        selected_planner = "nnUNetPlannerResEncL"
+
+    selected_plans = (
+        explicit_plans_identifier
+        if explicit_plans_identifier
+        else default_plans_identifier_for_planner(selected_planner)
+    )
+    return selected_planner, selected_plans
+
+
+def is_resenc_plans_identifier(plans_identifier: str) -> bool:
+    return plans_identifier.startswith("nnUNetResEncUNet")
+
+
+def log_resenc_citation_if_needed(plans_identifier: str) -> None:
+    if not is_resenc_plans_identifier(plans_identifier):
+        return
+    log_status("Using Residual Encoder preset/plans.")
+    log_status("Please cite: " + RESENC_CITATION)
+
+
 def resolve_plans_identifier(explicit_value: str | None, planner: str) -> str:
     if explicit_value:
         return explicit_value
     return default_plans_identifier_for_planner(planner)
+
+
+def available_plans_identifiers(
+    nnunet_root: Path,
+    dataset_id: int,
+    dataset_name: str,
+) -> List[str]:
+    dataset_dir = nnunet_root / "nnUNet_preprocessed" / f"Dataset{dataset_id:03d}_{dataset_name}"
+    if not dataset_dir.exists():
+        return []
+
+    return sorted(
+        {
+            path.stem
+            for path in dataset_dir.glob("*Plans.json")
+            if path.is_file()
+        }
+    )
+
+
+def resolve_training_plans_identifier(
+    explicit_value: str | None,
+    planner: str,
+    nnunet_root: Path,
+    dataset_id: int,
+    dataset_name: str,
+) -> str:
+    """Resolve a training plans identifier that actually exists when possible."""
+    if explicit_value:
+        return explicit_value
+
+    preferred = default_plans_identifier_for_planner(planner)
+    available = available_plans_identifiers(nnunet_root, dataset_id, dataset_name)
+
+    if preferred in available:
+        return preferred
+
+    # Prefer any existing ResEnc plans over legacy defaults.
+    resenc_candidates = [
+        "nnUNetResEncUNetLPlans",
+        "nnUNetResEncUNetMPlans",
+        "nnUNetResEncUNetXLPlans",
+    ]
+    for candidate in resenc_candidates:
+        if candidate in available:
+            log_status(
+                "Preferred plans identifier "
+                f"'{preferred}' not found; using available ResEnc plans '{candidate}'."
+            )
+            return candidate
+
+    if "nnUNetPlans" in available:
+        if preferred != "nnUNetPlans":
+            log_status(
+                "Preferred plans identifier "
+                f"'{preferred}' not found; using detected legacy plans 'nnUNetPlans'. "
+                "Run './run_nnunet plan --planner nnUNetPlannerResEncL' to generate ResEnc plans."
+            )
+        return "nnUNetPlans"
+    if available:
+        fallback = available[0]
+        log_status(
+            "Preferred plans identifier "
+            f"'{preferred}' not found; using detected '{fallback}'."
+        )
+        return fallback
+
+    # No plans files found yet. Keep planner-derived default so nnU-Net emits canonical error.
+    return preferred
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -185,9 +303,15 @@ def build_parser() -> argparse.ArgumentParser:
     plan = subparsers.add_parser("plan", help="Run nnU-Net planning and preprocessing")
     plan.add_argument("--verify-dataset-integrity", action="store_true")
     plan.add_argument(
+        "--resenc-preset",
+        choices=["M", "L", "XL"],
+        default="L",
+        help="Residual Encoder preset (maps to planner/plans). Default: L",
+    )
+    plan.add_argument(
         "--planner",
-        default="nnUNetPlannerResEncL",
-        help="Experiment planner class (recommended: nnUNetPlannerResEncL)",
+        default=None,
+        help="Experiment planner class. Overrides --resenc-preset if provided.",
     )
     plan.add_argument(
         "--plans-identifier",
@@ -211,9 +335,23 @@ def build_parser() -> argparse.ArgumentParser:
     train.add_argument("--configuration", default="3d_fullres")
     train.add_argument("--fold", default="0", help="Fold index or 'all'")
     train.add_argument(
+        "--resenc-preset",
+        choices=["M", "L", "XL"],
+        default="L",
+        help="Preferred Residual Encoder preset for plans auto-detection. Default: L",
+    )
+    train.add_argument(
+        "--planner",
+        default=None,
+        help="Planner used to infer default plans identifier. Overrides --resenc-preset.",
+    )
+    train.add_argument(
         "--plans-identifier",
-        default="nnUNetResEncUNetLPlans",
-        help="Plans identifier to use during training (use nnUNetPlans for old planner)",
+        default=None,
+        help=(
+            "Plans identifier to use during training. If omitted, a matching plans file "
+            "is auto-detected from nnUNet_preprocessed."
+        ),
     )
     train.add_argument("--trainer", default=None, help="Optional custom trainer class name")
 
@@ -222,6 +360,22 @@ def build_parser() -> argparse.ArgumentParser:
     predict.add_argument("--output", type=Path, required=True)
     predict.add_argument("--configuration", default="3d_fullres")
     predict.add_argument("--fold", default="0", help="Fold index or 'all'")
+    predict.add_argument(
+        "--resenc-preset",
+        choices=["M", "L", "XL"],
+        default="L",
+        help="Preferred Residual Encoder preset for plans auto-detection. Default: L",
+    )
+    predict.add_argument(
+        "--planner",
+        default=None,
+        help="Planner used to infer default plans identifier. Overrides --resenc-preset.",
+    )
+    predict.add_argument(
+        "--plans-identifier",
+        default=None,
+        help="Plans identifier for prediction. If omitted, inferred from preset/planner.",
+    )
 
     all_cmd = subparsers.add_parser("all", help="Prepare + plan + train in one command")
     all_cmd.add_argument("--source", type=Path, default=Path("datasets/Dataset001"))
@@ -233,9 +387,15 @@ def build_parser() -> argparse.ArgumentParser:
         help="Skip prepare step and reuse existing nnUNet_raw dataset",
     )
     all_cmd.add_argument(
+        "--resenc-preset",
+        choices=["M", "L", "XL"],
+        default="L",
+        help="Residual Encoder preset (maps to planner/plans). Default: L",
+    )
+    all_cmd.add_argument(
         "--planner",
-        default="nnUNetPlannerResEncL",
-        help="Experiment planner class used in all command",
+        default=None,
+        help="Experiment planner class used in all command. Overrides --resenc-preset.",
     )
     all_cmd.add_argument(
         "--plans-identifier",
@@ -339,8 +499,11 @@ def main() -> None:
         cmd = ["nnUNetv2_plan_and_preprocess", "-d", str(args.dataset_id)]
         if getattr(args, "verify_dataset_integrity", False):
             cmd.append("--verify_dataset_integrity")
-        planner = getattr(args, "planner", "nnUNetPlannerResEncL")
-        plans_identifier = resolve_plans_identifier(getattr(args, "plans_identifier", None), planner)
+        planner, plans_identifier = planner_and_plans_from_args(
+            preset=getattr(args, "resenc_preset", None),
+            planner=getattr(args, "planner", None),
+            explicit_plans_identifier=getattr(args, "plans_identifier", None),
+        )
         cmd.extend(["-pl", planner])
         if plans_identifier != "nnUNetPlans":
             cmd.extend(["-overwrite_plans_name", plans_identifier])
@@ -357,12 +520,31 @@ def main() -> None:
             cmd.extend(["-np", str(num_processes)])
         label = next_label("plan + preprocess")
         started = start_step(label)
+        log_resenc_citation_if_needed(plans_identifier)
         run_cmd(cmd, env, label)
         finish_step(label, started)
 
     if args.command in {"train", "all"}:
-        planner = getattr(args, "planner", "nnUNetPlannerResEncL")
-        plans_identifier = resolve_plans_identifier(getattr(args, "plans_identifier", None), planner)
+        planner, inferred_plans_identifier = planner_and_plans_from_args(
+            preset=getattr(args, "resenc_preset", None),
+            planner=getattr(args, "planner", None),
+            explicit_plans_identifier=getattr(args, "plans_identifier", None),
+        )
+        plans_identifier = resolve_training_plans_identifier(
+            explicit_value=getattr(args, "plans_identifier", None),
+            planner=planner,
+            nnunet_root=args.nnunet_root,
+            dataset_id=args.dataset_id,
+            dataset_name=args.dataset_name,
+        )
+        if plans_identifier == default_plans_identifier_for_planner(planner):
+            # Keep default path silent when preferred plans were found.
+            pass
+        elif getattr(args, "plans_identifier", None) is None and inferred_plans_identifier != plans_identifier:
+            log_status(
+                "Using detected plans identifier "
+                f"'{plans_identifier}' instead of preferred '{inferred_plans_identifier}'."
+            )
         configuration = args.configuration
         if args.command == "all" and configuration is None:
             if args.plan_configurations and len(args.plan_configurations) == 1:
@@ -393,11 +575,29 @@ def main() -> None:
         ]
         label = next_label("train model")
         started = start_step(label)
+        log_resenc_citation_if_needed(plans_identifier)
         run_cmd(cmd, env, label)
         finish_step(label, started)
 
     if args.command == "predict":
         args.output.mkdir(parents=True, exist_ok=True)
+        planner, preferred_plans_identifier = planner_and_plans_from_args(
+            preset=getattr(args, "resenc_preset", None),
+            planner=getattr(args, "planner", None),
+            explicit_plans_identifier=getattr(args, "plans_identifier", None),
+        )
+        plans_identifier = resolve_training_plans_identifier(
+            explicit_value=getattr(args, "plans_identifier", None),
+            planner=planner,
+            nnunet_root=args.nnunet_root,
+            dataset_id=args.dataset_id,
+            dataset_name=args.dataset_name,
+        )
+        if getattr(args, "plans_identifier", None) is None and preferred_plans_identifier != plans_identifier:
+            log_status(
+                "Using detected plans identifier "
+                f"'{plans_identifier}' instead of preferred '{preferred_plans_identifier}'."
+            )
         cmd = [
             "nnUNetv2_predict",
             "-i",
@@ -410,9 +610,12 @@ def main() -> None:
             args.configuration,
             "-f",
             str(args.fold),
+            "-p",
+            plans_identifier,
         ]
         label = next_label("predict")
         started = start_step(label)
+        log_resenc_citation_if_needed(plans_identifier)
         run_cmd(cmd, env, label)
         finish_step(label, started)
 
