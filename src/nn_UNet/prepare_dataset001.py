@@ -16,6 +16,9 @@ import SimpleITK as sitk
 from PIL import Image
 
 
+BACKGROUND_ALIASES = {"background", "pozadi"}
+
+
 @dataclass(frozen=True)
 class LabelEntry:
     original_name: str
@@ -174,6 +177,13 @@ def prepare_dataset(
     images_tr.mkdir(parents=True, exist_ok=True)
     labels_tr.mkdir(parents=True, exist_ok=True)
 
+    # Always clear old generated training files to avoid mixing legacy full volumes
+    # with patch-based cases when rerunning without --overwrite.
+    for old_file in images_tr.glob("*.nii.gz"):
+        old_file.unlink()
+    for old_file in labels_tr.glob("*.nii.gz"):
+        old_file.unlink()
+
     series_dirs = sorted(p for p in source_root.iterdir() if p.is_dir() and p.name.startswith("dub"))
     if not series_dirs:
         raise ValueError(f"No dub* folders found in {source_root}")
@@ -183,9 +193,10 @@ def prepare_dataset(
     labels_dict: Dict[str, int] = {"background": 0}
     training_cases: List[str] = []
 
+    # nnU-Net requires 0 to be background. We treat legacy "pozadi" as background.
     next_id = 1
     for entry in ref_labels:
-        if entry.safe_name == "background":
+        if entry.safe_name in BACKGROUND_ALIASES:
             color_to_id[entry.color] = 0
             continue
         key = entry.safe_name
@@ -238,7 +249,7 @@ def prepare_dataset(
             if skip_empty_patches and np.sum(lbl_patch) == 0:
                 continue
 
-            case_name = f"{series_name}_{case_counter:04d}"
+            case_name = f"{series_name}patch{case_counter:04d}"
             image_out = images_tr / f"{case_name}_0000.nii.gz"
             label_out = labels_tr / f"{case_name}.nii.gz"
 
@@ -275,7 +286,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--nnunet-root",
         type=Path,
-        default=Path("src/nn_unet/nnunet_data"),
+        default=Path("src/nn_UNet/nnunet_data"),
         help="Root where nnUNet_raw/preprocessed/results folders are stored",
     )
     parser.add_argument(

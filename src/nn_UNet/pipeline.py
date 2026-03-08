@@ -212,12 +212,6 @@ def log_resenc_citation_if_needed(plans_identifier: str) -> None:
     log_status("Please cite: " + RESENC_CITATION)
 
 
-def resolve_plans_identifier(explicit_value: str | None, planner: str) -> str:
-    if explicit_value:
-        return explicit_value
-    return default_plans_identifier_for_planner(planner)
-
-
 def available_plans_identifiers(
     nnunet_root: Path,
     dataset_id: int,
@@ -287,9 +281,59 @@ def resolve_training_plans_identifier(
     return preferred
 
 
+def resolve_runtime_plans(args: argparse.Namespace) -> Tuple[str, str]:
+    """Pick planner/plans for train/predict, favoring existing plans files when available."""
+    planner, preferred = planner_and_plans_from_args(
+        preset=getattr(args, "resenc_preset", None),
+        planner=getattr(args, "planner", None),
+        explicit_plans_identifier=getattr(args, "plans_identifier", None),
+    )
+    resolved = resolve_training_plans_identifier(
+        explicit_value=getattr(args, "plans_identifier", None),
+        planner=planner,
+        nnunet_root=args.nnunet_root,
+        dataset_id=args.dataset_id,
+        dataset_name=args.dataset_name,
+    )
+    if getattr(args, "plans_identifier", None) is None and preferred != resolved:
+        log_status(
+            "Using detected plans identifier "
+            f"'{resolved}' instead of preferred '{preferred}'."
+        )
+    return planner, resolved
+
+
+def resolve_train_configuration(args: argparse.Namespace) -> str:
+    if args.command != "all" or args.configuration is not None:
+        return args.configuration
+    if args.plan_configurations and len(args.plan_configurations) == 1:
+        return args.plan_configurations[0]
+    return "3d_fullres"
+
+
+def build_plan_command(
+    args: argparse.Namespace,
+    planner: str,
+    plans_identifier: str,
+) -> List[str]:
+    cmd = ["nnUNetv2_plan_and_preprocess", "-d", str(args.dataset_id), "-pl", planner]
+    if getattr(args, "verify_dataset_integrity", False):
+        cmd.append("--verify_dataset_integrity")
+    if plans_identifier != "nnUNetPlans":
+        cmd.extend(["-overwrite_plans_name", plans_identifier])
+
+    configs = args.configurations if args.command == "plan" else args.plan_configurations
+    num_processes = args.num_processes if args.command == "plan" else args.plan_num_processes
+    if configs:
+        cmd.extend(["-c", *configs])
+    if num_processes is not None:
+        cmd.extend(["-np", str(num_processes)])
+    return cmd
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="nnU-Net v2 3D pipeline for Dataset001")
-    parser.add_argument("--nnunet-root", type=Path, default=Path("src/nn_unet/nnunet_data"))
+    parser.add_argument("--nnunet-root", type=Path, default=Path("src/nn_UNet/nnunet_data"))
     parser.add_argument("--dataset-id", type=int, default=1)
     parser.add_argument("--dataset-name", default="BPWoodDefects")
 
@@ -415,14 +459,14 @@ def build_parser() -> argparse.ArgumentParser:
     all_cmd.add_argument(
         "--plan-configurations",
         nargs="+",
-        default=None,
+        default=["3d_fullres"],
         help="Optional nnU-Net configs to preprocess before training",
     )
     all_cmd.add_argument(
         "--plan-num-processes",
         type=int,
-        default=None,
-        help="Optional preprocessing worker count for plan step in all command",
+        default=1,
+        help="Optional preprocessing worker count for plan step in all command (default: 1)",
     )
 
     return parser
@@ -496,28 +540,12 @@ def main() -> None:
             finish_step(label, started)
 
     if args.command in {"plan", "all"}:
-        cmd = ["nnUNetv2_plan_and_preprocess", "-d", str(args.dataset_id)]
-        if getattr(args, "verify_dataset_integrity", False):
-            cmd.append("--verify_dataset_integrity")
         planner, plans_identifier = planner_and_plans_from_args(
             preset=getattr(args, "resenc_preset", None),
             planner=getattr(args, "planner", None),
             explicit_plans_identifier=getattr(args, "plans_identifier", None),
         )
-        cmd.extend(["-pl", planner])
-        if plans_identifier != "nnUNetPlans":
-            cmd.extend(["-overwrite_plans_name", plans_identifier])
-        if args.command == "plan":
-            configs = args.configurations
-            num_processes = args.num_processes
-        else:
-            configs = args.plan_configurations
-            num_processes = args.plan_num_processes
-
-        if configs:
-            cmd.extend(["-c", *configs])
-        if num_processes is not None:
-            cmd.extend(["-np", str(num_processes)])
+        cmd = build_plan_command(args, planner, plans_identifier)
         label = next_label("plan + preprocess")
         started = start_step(label)
         log_resenc_citation_if_needed(plans_identifier)
@@ -525,33 +553,10 @@ def main() -> None:
         finish_step(label, started)
 
     if args.command in {"train", "all"}:
-        planner, inferred_plans_identifier = planner_and_plans_from_args(
-            preset=getattr(args, "resenc_preset", None),
-            planner=getattr(args, "planner", None),
-            explicit_plans_identifier=getattr(args, "plans_identifier", None),
-        )
-        plans_identifier = resolve_training_plans_identifier(
-            explicit_value=getattr(args, "plans_identifier", None),
-            planner=planner,
-            nnunet_root=args.nnunet_root,
-            dataset_id=args.dataset_id,
-            dataset_name=args.dataset_name,
-        )
-        if plans_identifier == default_plans_identifier_for_planner(planner):
-            # Keep default path silent when preferred plans were found.
-            pass
-        elif getattr(args, "plans_identifier", None) is None and inferred_plans_identifier != plans_identifier:
-            log_status(
-                "Using detected plans identifier "
-                f"'{plans_identifier}' instead of preferred '{inferred_plans_identifier}'."
-            )
-        configuration = args.configuration
-        if args.command == "all" and configuration is None:
-            if args.plan_configurations and len(args.plan_configurations) == 1:
-                configuration = args.plan_configurations[0]
-            else:
-                configuration = "3d_fullres"
+        _planner, plans_identifier = resolve_runtime_plans(args)
+        configuration = resolve_train_configuration(args)
 
+        # Tiny datasets (<5 cases) need explicit splits because nnU-Net expects CV folds by default.
         ensure_crossval_splits(
             nnunet_root=args.nnunet_root,
             dataset_id=args.dataset_id,
@@ -581,23 +586,7 @@ def main() -> None:
 
     if args.command == "predict":
         args.output.mkdir(parents=True, exist_ok=True)
-        planner, preferred_plans_identifier = planner_and_plans_from_args(
-            preset=getattr(args, "resenc_preset", None),
-            planner=getattr(args, "planner", None),
-            explicit_plans_identifier=getattr(args, "plans_identifier", None),
-        )
-        plans_identifier = resolve_training_plans_identifier(
-            explicit_value=getattr(args, "plans_identifier", None),
-            planner=planner,
-            nnunet_root=args.nnunet_root,
-            dataset_id=args.dataset_id,
-            dataset_name=args.dataset_name,
-        )
-        if getattr(args, "plans_identifier", None) is None and preferred_plans_identifier != plans_identifier:
-            log_status(
-                "Using detected plans identifier "
-                f"'{plans_identifier}' instead of preferred '{preferred_plans_identifier}'."
-            )
+        _planner, plans_identifier = resolve_runtime_plans(args)
         cmd = [
             "nnUNetv2_predict",
             "-i",
