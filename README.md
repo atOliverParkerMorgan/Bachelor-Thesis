@@ -266,6 +266,13 @@ poetry run python src/preprocessing/segmentation/segmentation.py \
 
 This repository now includes a dedicated nnU-Net pipeline under `src/nn_unet/` with defaults tuned for `3d_fullres`.
 
+Residual Encoder presets are supported (`M`, `L`, `XL`) and default to `L`.
+When using these presets, please cite:
+
+Isensee, F.*, Wald, T.*, Ulrich, C.*, Baumgartner, M.*, Roy, S., Maier-Hein, K., Jaeger, P. (2024).
+nnU-Net Revisited: A Call for Rigorous Validation in 3D Medical Image Segmentation.
+arXiv:2404.09556.
+
 ### Layout
 
 - `src/nn_unet/prepare_dataset001.py` - converts `datasets/Dataset001/dub*` slices into nnU-Net raw NIfTI volumes
@@ -290,6 +297,14 @@ Plan and preprocess:
 
 ```bash
 ./run_nnunet plan --verify-dataset-integrity
+```
+
+Select a specific Residual Encoder preset:
+
+```bash
+./run_nnunet plan --resenc-preset M
+./run_nnunet plan --resenc-preset L
+./run_nnunet plan --resenc-preset XL
 ```
 
 If preprocessing runs out of RAM, limit configs and worker processes:
@@ -328,20 +343,23 @@ Use this when you are actively using the computer (lower CPU pressure, shorter r
 
 ```bash
 nnUNet_n_proc_DA=1 OMP_NUM_THREADS=4 MKL_NUM_THREADS=4 \
-./run_nnunet train --configuration 3d_lowres --fold 0 --trainer nnUNetTrainer_50epochs
+./run_nnunet train --resenc-preset L --configuration 3d_lowres --fold 0 --trainer nnUNetTrainer_50epochs
 ```
 
 Use this when you are away and want a full run (higher load, better final quality):
 
 ```bash
-./run_nnunet train --configuration 3d_lowres --fold 0
+./run_nnunet train --resenc-preset L --configuration 3d_lowres --fold 0
 ```
 
 Optional full-speed cross-validation while away:
 
 ```bash
-./run_nnunet train --configuration 3d_lowres --fold all
+./run_nnunet train --resenc-preset L --configuration 3d_lowres --fold all
 ```
+
+By default, `run_nnunet train` prefers the plans matching your preset (`nnUNetResEncUNetM/L/XLPlans`).
+If only legacy `nnUNetPlans` are available, the wrapper logs a warning and uses those plans.
 
 ### Predict
 

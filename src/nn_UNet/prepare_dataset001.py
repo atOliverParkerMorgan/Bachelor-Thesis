@@ -116,6 +116,41 @@ def write_nifti(volume_zyx: np.ndarray, out_path: Path, spacing_xyz: Tuple[float
     sitk.WriteImage(image, str(out_path), useCompression=True)
 
 
+def generate_subvolumes(
+    image_volume: np.ndarray,
+    label_volume: np.ndarray,
+    patch_size: Tuple[int, int, int] = (96, 256, 96),
+    stride: Tuple[int, int, int] = (64, 128, 64),
+) -> Iterable[Tuple[np.ndarray, np.ndarray]]:
+    """Split a 3D volume into overlapping sub-volumes of fixed size."""
+    if image_volume.shape != label_volume.shape:
+        raise ValueError(
+            "Image/label shape mismatch before patching: "
+            f"{image_volume.shape} vs {label_volume.shape}"
+        )
+
+    z_max, y_max, x_max = image_volume.shape
+    pz, py, px = patch_size
+    sz, sy, sx = stride
+
+    if pz <= 0 or py <= 0 or px <= 0:
+        raise ValueError(f"Invalid patch_size: {patch_size}")
+    if sz <= 0 or sy <= 0 or sx <= 0:
+        raise ValueError(f"Invalid stride: {stride}")
+
+    for z in range(0, max(1, z_max - pz + 1), sz):
+        for y in range(0, max(1, y_max - py + 1), sy):
+            for x in range(0, max(1, x_max - px + 1), sx):
+                img_patch = image_volume[z : z + pz, y : y + py, x : x + px]
+                lbl_patch = label_volume[z : z + pz, y : y + py, x : x + px]
+
+                # Keep only full-size patches to preserve a consistent case shape.
+                if img_patch.shape != patch_size or lbl_patch.shape != patch_size:
+                    continue
+
+                yield img_patch, lbl_patch
+
+
 def prepare_dataset(
     source_root: Path,
     nnunet_root: Path,
@@ -123,6 +158,9 @@ def prepare_dataset(
     dataset_id: int,
     dataset_name: str,
     overwrite: bool,
+    patch_size: Tuple[int, int, int] = (96, 256, 96),
+    stride: Tuple[int, int, int] = (64, 128, 64),
+    skip_empty_patches: bool = True,
 ) -> Path:
     dataset_dirname = f"Dataset{dataset_id:03d}_{dataset_name}"
     raw_root = nnunet_root / "nnUNet_raw"
@@ -190,12 +228,31 @@ def prepare_dataset(
         if image_volume.shape != label_volume.shape:
             raise ValueError(f"Image/label shape mismatch in {series_name}: {image_volume.shape} vs {label_volume.shape}")
 
-        image_out = images_tr / f"{series_name}_0000.nii.gz"
-        label_out = labels_tr / f"{series_name}.nii.gz"
+        case_counter = 0
+        for img_patch, lbl_patch in generate_subvolumes(
+            image_volume=image_volume,
+            label_volume=label_volume,
+            patch_size=patch_size,
+            stride=stride,
+        ):
+            if skip_empty_patches and np.sum(lbl_patch) == 0:
+                continue
 
-        write_nifti(image_volume, image_out, spacing_xyz)
-        write_nifti(label_volume, label_out, spacing_xyz)
-        training_cases.append(series_name)
+            case_name = f"{series_name}_{case_counter:04d}"
+            image_out = images_tr / f"{case_name}_0000.nii.gz"
+            label_out = labels_tr / f"{case_name}.nii.gz"
+
+            write_nifti(img_patch, image_out, spacing_xyz)
+            write_nifti(lbl_patch, label_out, spacing_xyz)
+
+            training_cases.append(case_name)
+            case_counter += 1
+
+        if case_counter == 0:
+            raise ValueError(
+                f"No valid patches produced for {series_name}. "
+                "Try reducing --patch-size and/or disabling --skip-empty-patches."
+            )
 
     dataset_json = {
         "name": dataset_name,
@@ -230,6 +287,34 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--dataset-id", type=int, default=1, help="nnU-Net dataset id")
     parser.add_argument("--dataset-name", default="BPWoodDefects", help="Dataset suffix in nnU-Net naming")
     parser.add_argument("--overwrite", action="store_true", help="Overwrite existing prepared dataset")
+    parser.add_argument(
+        "--patch-size",
+        nargs=3,
+        type=int,
+        metavar=("Z", "Y", "X"),
+        default=(96, 256, 96),
+        help="Patch size for sub-volume generation (default: 96 256 96)",
+    )
+    parser.add_argument(
+        "--stride",
+        nargs=3,
+        type=int,
+        metavar=("Z", "Y", "X"),
+        default=(64, 128, 64),
+        help="Sliding stride for sub-volume generation (default: 64 128 64)",
+    )
+    parser.add_argument(
+        "--skip-empty-patches",
+        action="store_true",
+        default=True,
+        help="Skip generated patches with only background labels (default: enabled)",
+    )
+    parser.add_argument(
+        "--keep-empty-patches",
+        action="store_false",
+        dest="skip_empty_patches",
+        help="Keep generated patches even when labels are all background",
+    )
     return parser
 
 
@@ -244,6 +329,9 @@ def main() -> None:
         dataset_id=args.dataset_id,
         dataset_name=args.dataset_name,
         overwrite=args.overwrite,
+        patch_size=tuple(args.patch_size),
+        stride=tuple(args.stride),
+        skip_empty_patches=args.skip_empty_patches,
     )
     print(f"Prepared nnU-Net dataset: {dataset_root}")
 
