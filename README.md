@@ -316,6 +316,33 @@ Low-memory variant (preprocess only selected config with a single worker):
 ./run_nnunet all --overwrite --fold 0 --configuration 3d_lowres --plan-configurations 3d_lowres --plan-num-processes 1
 ```
 
+### Training Profiles (At PC vs Away)
+
+If data is already prepared, skip that step:
+
+```bash
+./run_nnunet all --skip-prepare --overwrite --fold 0 --configuration 3d_lowres --plan-configurations 3d_lowres --plan-num-processes 1
+```
+
+Use this when you are actively using the computer (lower CPU pressure, shorter run):
+
+```bash
+nnUNet_n_proc_DA=1 OMP_NUM_THREADS=4 MKL_NUM_THREADS=4 \
+./run_nnunet train --configuration 3d_lowres --fold 0 --trainer nnUNetTrainer_50epochs
+```
+
+Use this when you are away and want a full run (higher load, better final quality):
+
+```bash
+./run_nnunet train --configuration 3d_lowres --fold 0
+```
+
+Optional full-speed cross-validation while away:
+
+```bash
+./run_nnunet train --configuration 3d_lowres --fold all
+```
+
 ### Predict
 
 Inference expects nnU-Net style input files named like `case_0000.nii.gz` in an input folder.
