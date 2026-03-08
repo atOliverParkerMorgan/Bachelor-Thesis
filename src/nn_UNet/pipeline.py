@@ -77,7 +77,7 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     prep = subparsers.add_parser("prepare", help="Convert Dataset001 to nnU-Net raw format")
-    prep.add_argument("--source", type=Path, default=Path("src/nn_UNet/Dataset001"))
+    prep.add_argument("--source", type=Path, default=Path("datasets/Dataset001"))
     prep.add_argument("--geometry-root", type=Path, default=Path("src/png"))
     prep.add_argument("--overwrite", action="store_true")
 
@@ -108,10 +108,18 @@ def build_parser() -> argparse.ArgumentParser:
     predict.add_argument("--fold", default="0", help="Fold index or 'all'")
 
     all_cmd = subparsers.add_parser("all", help="Prepare + plan + train in one command")
-    all_cmd.add_argument("--source", type=Path, default=Path("src/nn_UNet/Dataset001"))
+    all_cmd.add_argument("--source", type=Path, default=Path("datasets/Dataset001"))
     all_cmd.add_argument("--geometry-root", type=Path, default=Path("src/png"))
     all_cmd.add_argument("--overwrite", action="store_true")
-    all_cmd.add_argument("--configuration", default="3d_fullres")
+    all_cmd.add_argument(
+        "--configuration",
+        default=None,
+        help=(
+            "Training configuration for the all command. If omitted and exactly one "
+            "--plan-configurations value is given, that value is used. "
+            "Otherwise defaults to 3d_fullres."
+        ),
+    )
     all_cmd.add_argument("--fold", default="0")
     all_cmd.add_argument(
         "--plan-configurations",
@@ -204,6 +212,13 @@ def main() -> None:
         finish_step(label, started)
 
     if args.command in {"train", "all"}:
+        configuration = args.configuration
+        if args.command == "all" and configuration is None:
+            if args.plan_configurations and len(args.plan_configurations) == 1:
+                configuration = args.plan_configurations[0]
+            else:
+                configuration = "3d_fullres"
+
         trainer_args: List[str] = []
         trainer = getattr(args, "trainer", None)
         if trainer:
@@ -211,7 +226,7 @@ def main() -> None:
         cmd = [
             "nnUNetv2_train",
             str(args.dataset_id),
-            args.configuration,
+            configuration,
             str(args.fold),
             *trainer_args,
         ]
