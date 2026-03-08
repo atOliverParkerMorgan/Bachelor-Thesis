@@ -8,13 +8,12 @@
     "background": 0,
     "hniloba": 1,
     "kura": 2,
-    "pozadi": 3,
-    "poskozeni_hmyzem": 4,
-    "suk": 5,
-    "trhlina": 6,
-    "drevo": 7
+    "poskozeni_hmyzem": 3,
+    "suk": 4,
+    "trhlina": 5,
+    "drevo": 6
   },
-  "numTraining": 3,
+  "numTraining": 1302,
   "file_ending": ".nii.gz",
   "overwrite_image_reader_writer": "SimpleITKIO"
 }

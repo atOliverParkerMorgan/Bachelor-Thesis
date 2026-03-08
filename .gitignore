@@ -15,6 +15,7 @@ build/
 .eggs/
 src/nn_UNet/Dataset*
 src/nn_UNet/nnunnet_data/*
+src/nn_UNet/nnunet_data/
 
 .temp_extract/
 .env
