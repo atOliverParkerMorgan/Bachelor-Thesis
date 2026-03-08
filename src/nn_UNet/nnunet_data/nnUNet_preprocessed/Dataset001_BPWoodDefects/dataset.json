@@ -11,7 +11,8 @@
     "pozadi": 3,
     "poskozeni_hmyzem": 4,
     "suk": 5,
-    "trhlina": 6
+    "trhlina": 6,
+    "drevo": 7
   },
   "numTraining": 3,
   "file_ending": ".nii.gz",

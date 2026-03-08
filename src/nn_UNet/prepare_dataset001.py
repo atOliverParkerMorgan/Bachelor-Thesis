@@ -214,7 +214,7 @@ def prepare_dataset(
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Prepare Dataset001 for nnU-Net v2")
-    parser.add_argument("--source", type=Path, default=Path("src/nn_UNet/Dataset001"), help="Source Dataset001 root")
+    parser.add_argument("--source", type=Path, default=Path("datasets/Dataset001"), help="Source Dataset001 root")
     parser.add_argument(
         "--nnunet-root",
         type=Path,

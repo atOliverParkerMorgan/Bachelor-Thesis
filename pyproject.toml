@@ -22,9 +22,18 @@ dotenv = "^0.9.9"
 requests-toolbelt = "^1.0.0"
 cvat-sdk = "^2.57.0"
 nnunetv2 = "^2.6.2"
+torch = {version = "2.6.0+cu124", source = "pytorch-cu124"}
+torchvision = {version = "0.21.0+cu124", source = "pytorch-cu124"}
+torchaudio = {version = "2.6.0+cu124", source = "pytorch-cu124"}
 
 [tool.poetry.group.dev.dependencies]
 ipykernel = "^7.2.0"
+
+
+[[tool.poetry.source]]
+name = "pytorch-cu124"
+url = "https://download.pytorch.org/whl/cu124"
+priority = "explicit"
 
 [build-system]
 requires = ["poetry-core"]

@@ -268,7 +268,7 @@ This repository now includes a dedicated nnU-Net pipeline under `src/nn_unet/` w
 
 ### Layout
 
-- `src/nn_unet/prepare_dataset001.py` - converts `src/nn_UNet/Dataset001/dub*` slices into nnU-Net raw NIfTI volumes
+- `src/nn_unet/prepare_dataset001.py` - converts `datasets/Dataset001/dub*` slices into nnU-Net raw NIfTI volumes
 - `src/nn_unet/pipeline.py` - wrappers for prepare, plan/preprocess, train, and predict
 - `run_nnunet` - convenience launcher (`poetry run python src/nn_unet/pipeline.py ...`)
 
@@ -313,7 +313,7 @@ Or run all three steps in one command:
 Low-memory variant (preprocess only selected config with a single worker):
 
 ```bash
-./run_nnunet all --overwrite --fold 0 --plan-configurations 3d_lowres --plan-num-processes 1
+./run_nnunet all --overwrite --fold 0 --configuration 3d_lowres --plan-configurations 3d_lowres --plan-num-processes 1
 ```
 
 ### Predict
