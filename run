@@ -248,9 +248,7 @@ for series in "${series_list[@]}"; do
     mkdir -p "$segmentation_base"
     
     poetry run python src/preprocessing/segmentation/segmentation.py \
-        --input "$output_root/$series" \
-        --output "$segmentation_output" \
-        --config "$series" \
+        --tree "$series" \
         $MASK_ARGS 2>/dev/null || {
         echo -e "${RED}✗ $series: Segmentation failed${NC}"
         continue

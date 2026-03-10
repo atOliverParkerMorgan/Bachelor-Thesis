@@ -1,359 +1,154 @@
 import argparse
 from pathlib import Path
+import sys
 import cv2
+import numpy as np
 from tqdm import tqdm
 import improutils as iu
-
-from .seg_common import fourier_bandpass_filter, normalize_dataset_intensity
-from .seg_trhlina_and_hniloba import segment_trhlina_and_hniloba
-from .seg_config import DEFAULT_CONFIG
+from .seg_common import kmeans_brightness_labels, mask_from_cluster_ids
 from .seg_log import extract_log_mask
 from .seg_kura import segment_crust
 from .seg_suk import segment_suk
 from .seg_pozadi import segment_background
+from .seg_trhlina_and_hniloba import segment_trhlina_and_hniloba
 
 
-# --- Processing Pipeline ---
+MODULE_DIR = Path(__file__).resolve().parent
+REPO_ROOT_HINT = Path(__file__).resolve().parents[3]
+for import_path in [str(REPO_ROOT_HINT), str(MODULE_DIR)]:
+    if import_path not in sys.path:
+        sys.path.insert(0, import_path)
 
 
-def build_masks(img, config, requested_masks=None):
-    """Generates all semantic masks for a single frame.
-    
-    Args:
-        img: Input image
-        config: Configuration dict
-        requested_masks: Set of mask names to generate. If None, generates all.
-                        Valid names: 'pozadi', 'kura', 'suk', 'hniloba', 'trhlina'
-    
-    Returns:
-        Dict mapping mask names to their arrays (or None if not requested)
-    """
+
+
+MASK_NAMES = ["pozadi", "kura", "suk", "hniloba", "trhlina"]
+
+CRACK_MIN_AREA = 10
+CRACK_MAX_ASPECT_RATIO = 0.5
+TRHLINA_HNILOBA_ROUNDNESS_BOUNDARY = 0.15
+CRACK_THRESHOLD = 90
+HNILOBA_MIN_AREA = 0
+RESTRICT_HNILOBA_TO_SUK = True
+BG_CLOSE_KERNEL_SIZE = 21
+FFT_MIN_FREQ = 15
+FFT_MAX_FREQ = 200
+
+
+def build_masks(img, requested_masks=None):
+    """Generate requested masks with a fixed, minimal segmentation pipeline."""
     if requested_masks is None:
-        requested_masks = {'pozadi', 'kura', 'suk', 'hniloba', 'trhlina'}
+        requested_masks = set(MASK_NAMES)
     
-    # Always need log_mask as base
-    log_mask = extract_log_mask(
-        img.copy(), config["min_log_area"], config["log_close_kernel_size"]
-    )
-    log_masked = iu.apply_mask(img, log_mask)
+    log_mask = extract_log_mask(img.copy(), min_area=0, close_kernel_size=5)
 
-    normalized_gray = normalize_dataset_intensity(
-        log_masked,
-        gamma=config["gamma_correction"],
+    # Keep log/background as exact complements by deriving both from seg_pozadi.
+    background_mask, log_segment = segment_background(
+        log_mask,
+        close_kernel_size=BG_CLOSE_KERNEL_SIZE,
+        return_log=True,
     )
-    normalized_log = cv2.cvtColor(normalized_gray, cv2.COLOR_GRAY2BGR)
-    normalized_log = iu.apply_mask(normalized_log, log_mask)
-    
+    log_mask = log_segment
+    sorted_labels, _ = kmeans_brightness_labels(img, k=3)
+
     results = {}
-    
-    # Generate bark (kura) if needed by itself or as dependency
-    need_bark = 'kura' in requested_masks or 'suk' in requested_masks or \
-                'hniloba' in requested_masks or 'trhlina' in requested_masks
-    
-    if need_bark:
-        crust_mask = segment_crust(
-            log_masked,
-            log_mask,
-            config["crust_alpha"],
-            config["crust_beta"],
-            config["crust_wood_thresh"],
-            config["crust_wood_close_kernel_size"],
-            config["crust_connect_kernel_size"],
-            config["crust_sobel_kernel_size"],
-            config["crust_add_kernel_size"],
-            config["crust_max_edge_distance_ratio"],
-            config["crust_max_edge_distance_px"],
-            config["crust_edge_threshold"],
-            config["crust_wood_close_iterations"],
-        )
-        inner_log_mask = cv2.subtract(log_mask, crust_mask)
-        if 'kura' in requested_masks:
-            results['kura'] = crust_mask
-    else:
-        crust_mask = None
-        inner_log_mask = None
-    
-    # Generate knot (suk) if needed by itself or as dependency
-    need_knot = 'suk' in requested_masks or 'hniloba' in requested_masks
-    
-    if need_knot and inner_log_mask is not None:
-        knot_mask = segment_suk(
-            normalized_log, log_mask, config["suk_intensity_threshold"],
-            min_area=config["suk_min_area"],
-            gauss_kernel_size=config["suk_gauss_kernel_size"]
-        )
-        knot_mask = cv2.bitwise_and(knot_mask, inner_log_mask)
-        if 'suk' in requested_masks:
-            results['suk'] = knot_mask
-    else:
-        knot_mask = None
-    
-    # Prepare optional frequency-domain preprocessing for decay/crack segmentation
-    freq_filtered_log = None
-    needs_frequency_filter = (
-        ('hniloba' in requested_masks or 'trhlina' in requested_masks)
-        and inner_log_mask is not None
-        and config["fft_max_freq"] > 0
-    )
-    if needs_frequency_filter:
-        filtered_gray = fourier_bandpass_filter(
-            normalized_log,
-            config["fft_min_freq"],
-            config["fft_max_freq"],
-        )
-        freq_filtered_log = cv2.cvtColor(filtered_gray, cv2.COLOR_GRAY2BGR)
-        freq_filtered_log = iu.apply_mask(freq_filtered_log, log_mask)
 
-    # Generate cracks/decay from shared contour candidates split by roundness boundary.
-    if ('trhlina' in requested_masks or 'hniloba' in requested_masks) and inner_log_mask is not None:
-        crack_source = freq_filtered_log if freq_filtered_log is not None else normalized_log
-        inner_log_img = iu.apply_mask(crack_source, inner_log_mask)
-        crack_mask, decay_mask = segment_trhlina_and_hniloba(
-            inner_log_img,
-            knot_mask,
-            config["crack_min_area"],
-            config["crack_max_aspect_ratio"],
-            config["trhlina_hniloba_roundness_boundary"],
-            crack_threshold=config["crack_threshold"],
-            hniloba_min_area=config["hniloba_min_area"],
-            restrict_hniloba_to_knot=config["restrict_hniloba_to_suk"],
+    need_kura_or_dark = (
+        "kura" in requested_masks
+        or "trhlina" in requested_masks
+        or "hniloba" in requested_masks
+    )
+    if need_kura_or_dark:
+        kura_mask = segment_crust(sorted_labels, log_mask)
+        # Two darkest clusters inside log are used as crack/decay candidates.
+        dark_inside_log = mask_from_cluster_ids(
+            sorted_labels,
+            cluster_ids={0},
+            valid_mask=log_mask,
         )
-        if 'trhlina' in requested_masks:
-            results['trhlina'] = crack_mask
-        if 'hniloba' in requested_masks:
-            results['hniloba'] = decay_mask
-    
-    # Generate background (pozadi)
-    if 'pozadi' in requested_masks:
-        background_mask = segment_background(
-            log_mask,
-            crust_mask,
-            config["bg_close_kernel_size"],
-        )
-        results['pozadi'] = background_mask
-    
+    else:
+        kura_mask = None
+        dark_inside_log = None
+
+    if "kura" in requested_masks and kura_mask is not None:
+        results["kura"] = kura_mask
+
+    need_suk = "suk" in requested_masks or "hniloba" in requested_masks
+    if need_suk:
+        suk_mask = segment_suk(img, log_mask, intensity_threshold=220, min_area=250, gauss_kernel_size=5)
+        if "suk" in requested_masks:
+            results["suk"] = suk_mask
+    else:
+        suk_mask = None
+
+    if ("trhlina" in requested_masks or "hniloba" in requested_masks) and dark_inside_log is not None:
+        # Use only the darkest K-means region as the crack/decay source image.
+        dark_log_img = iu.apply_mask(img, dark_inside_log)
+        trhlina_mask, hniloba_mask = segment_trhlina_and_hniloba(dark_log_img)
+        if "trhlina" in requested_masks:
+            results["trhlina"] = trhlina_mask
+        if "hniloba" in requested_masks:
+            results["hniloba"] = hniloba_mask
+    elif "hniloba" in requested_masks:
+        results["hniloba"] = np.zeros_like(log_mask, dtype=np.uint8)
+
+    if "pozadi" in requested_masks:
+        results["pozadi"] = background_mask
+
     return results
 
 
-def build_parser(defaults):
+def find_repo_root(start):
+    for candidate in [start, *start.parents]:
+        if (candidate / "pyproject.toml").exists() and (candidate / "src").exists():
+            return candidate
+    raise FileNotFoundError("Could not locate repository root (missing pyproject.toml/src)")
+
+
+def build_parser():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--input", "-i", type=Path, required=True)
-    parser.add_argument("--output", "-o", type=Path, required=True)
+    parser.add_argument("--tree", "-t", required=True, help="Tree folder name (for example: dub5)")
     parser.add_argument(
         "--masks", "-m",
         nargs="+",
-        choices=["pozadi", "kura", "suk", "hniloba", "trhlina", "all"],
+        choices=[*MASK_NAMES, "all"],
         default=["all"],
-        help="Masks to generate (default: all)"
-    )
-    parser.add_argument("--min-log-area", type=int, default=defaults["min_log_area"])
-    parser.add_argument(
-        "--log-close-kernel-size",
-        type=int,
-        default=defaults["log_close_kernel_size"],
-    )
-    parser.add_argument(
-        "--crust-alpha", type=float, default=defaults["crust_alpha"]
-    )
-    parser.add_argument(
-        "--crust-beta", type=int, default=defaults["crust_beta"]
-    )
-    parser.add_argument(
-        "--crust-wood-thresh", type=int, default=defaults["crust_wood_thresh"]
-    )
-    parser.add_argument(
-        "--crust-wood-close-kernel-size",
-        type=int,
-        default=defaults["crust_wood_close_kernel_size"],
-    )
-    parser.add_argument(
-        "--crust-wood-close-iterations",
-        type=int,
-        default=defaults["crust_wood_close_iterations"],
-    )
-    parser.add_argument(
-        "--crust-connect-kernel-size",
-        type=int,
-        default=defaults["crust_connect_kernel_size"],
-    )
-    parser.add_argument(
-        "--crust-sobel-kernel-size",
-        type=int,
-        default=defaults["crust_sobel_kernel_size"],
-    )
-    parser.add_argument(
-        "--crust-add-kernel-size",
-        type=int,
-        default=defaults["crust_add_kernel_size"],
-    )
-    parser.add_argument(
-        "--crust-edge-threshold",
-        type=int,
-        default=defaults["crust_edge_threshold"],
-    )
-    parser.add_argument(
-        "--crust-max-edge-distance-ratio",
-        type=float,
-        default=defaults["crust_max_edge_distance_ratio"],
-        help="Max inward bark distance as a ratio of log radius-like thickness (0-1).",
-    )
-    parser.add_argument(
-        "--crust-max-edge-distance-px",
-        type=int,
-        default=defaults["crust_max_edge_distance_px"],
-        help="Optional absolute cap (px) for crust inward distance; 0 disables cap.",
-    )
-    parser.add_argument(
-        "--bg-close-kernel-size", type=int, default=defaults["bg_close_kernel_size"]
-    )
-    parser.add_argument(
-        "--suk-intensity-threshold",
-        type=int,
-        default=defaults["suk_intensity_threshold"],
-    )
-    parser.add_argument(
-        "--suk-min-area",
-        type=int,
-        default=defaults["suk_min_area"],
-    )
-    parser.add_argument(
-        "--suk-gauss-kernel-size",
-        type=int,
-        default=defaults["suk_gauss_kernel_size"],
-    )
-    parser.add_argument(
-        "--hniloba-min-area",
-        type=int,
-        default=defaults["hniloba_min_area"],
-    )
-    parser.add_argument(
-        "--gamma-correction",
-        type=float,
-        default=defaults["gamma_correction"],
-        help="Gamma correction used after histogram equalization for cross-dataset brightness normalization.",
-    )
-    parser.add_argument(
-        "--fft-min-freq",
-        type=int,
-        default=defaults["fft_min_freq"],
-        help="Minimum passed frequency radius for Fourier band-pass (0 keeps all low frequencies).",
-    )
-    parser.add_argument(
-        "--fft-max-freq",
-        type=int,
-        default=defaults["fft_max_freq"],
-        help="Maximum passed frequency radius for Fourier band-pass (<=0 disables filtering).",
-    )
-    parser.add_argument(
-        "--crack-threshold",
-        type=int,
-        default=defaults["crack_threshold"],
-    )
-    parser.add_argument(
-        "--crack-edge-exclude-kernel",
-        type=int,
-        default=defaults["crack_edge_exclude_kernel"],
-    )
-    parser.add_argument(
-        "--crack-crust-exclude-kernel",
-        type=int,
-        default=defaults["crack_crust_exclude_kernel"],
-    )
-    parser.add_argument(
-        "--crack-edge-dilate-kernel",
-        type=int,
-        dest="crack_edge_exclude_kernel",
-        help=argparse.SUPPRESS,
-    )
-    parser.add_argument(
-        "--crack-min-area",
-        type=int,
-        default=defaults["crack_min_area"],
-    )
-    parser.add_argument(
-        "--crack-max-aspect-ratio",
-        type=float,
-        default=defaults["crack_max_aspect_ratio"],
-    )
-    parser.add_argument(
-        "--trhlina-hniloba-roundness-boundary",
-        type=float,
-        default=defaults["trhlina_hniloba_roundness_boundary"],
-        help="Contours with roundness <= boundary are trhlina, > boundary are hniloba.",
-    )
-    parser.add_argument(
-        "--crack-max-roundness",
-        type=float,
-        dest="trhlina_hniloba_roundness_boundary",
-        help=argparse.SUPPRESS,
-    )
-    parser.add_argument(
-        "--debug-plots",
-        action="store_true",
-        default=defaults["debug_plots"],
-        help="Show intermediate debug plots for segmentation stages.",
-    )
-    parser.add_argument(
-        "--restrict-hniloba-to-suk",
-        dest="restrict_hniloba_to_suk",
-        action="store_true",
-        default=defaults["restrict_hniloba_to_suk"],
-        help="Restrict hniloba mask to detected suk regions.",
-    )
-    parser.add_argument(
-        "--no-restrict-hniloba-to-suk",
-        dest="restrict_hniloba_to_suk",
-        action="store_false",
-        help="Allow hniloba outside suk regions.",
+        help="Masks to generate (default: all)",
     )
     return parser
 
 
 def main():
-    defaults = DEFAULT_CONFIG.copy()
-    parser = build_parser(defaults)
+    parser = build_parser()
     args = parser.parse_args()
+
+    repo_root = find_repo_root(Path(__file__).resolve())
+    input_dir = repo_root / "src" / "png" / args.tree
+    output_dir = repo_root / "src" / "output" / args.tree
+
+    if not input_dir.exists():
+        raise FileNotFoundError(f"Input tree folder does not exist: {input_dir}")
 
     files = sorted(
         [
             f
-            for f in args.input.rglob("*")
+            for f in input_dir.rglob("*")
             if f.suffix.lower() in [".png", ".jpg", ".tif", ".bmp"]
         ]
     )
-    config = vars(args)
-    config["bg_close_kernel_size"] |= 1
-    config["log_close_kernel_size"] |= 1
-    config["suk_gauss_kernel_size"] |= 1
-    config["crust_wood_close_kernel_size"] |= 1
-    config["crust_wood_close_iterations"] = max(1, int(config["crust_wood_close_iterations"]))
-    config["crust_connect_kernel_size"] |= 1
-    config["crust_add_kernel_size"] = max(1, config["crust_add_kernel_size"])
-    config["crust_sobel_kernel_size"] |= 1
-    config["crust_edge_threshold"] = max(0, min(255, int(config["crust_edge_threshold"])))
-    config["crack_edge_exclude_kernel"] |= 1
-    config["crack_crust_exclude_kernel"] |= 1
-    config["crack_threshold"] = max(0, min(255, int(config["crack_threshold"])))
-    config["fft_min_freq"] = max(0, int(config["fft_min_freq"]))
-    config["fft_max_freq"] = max(0, int(config["fft_max_freq"]))
-    config["gamma_correction"] = max(0.1, float(config["gamma_correction"]))
-    config["trhlina_hniloba_roundness_boundary"] = min(
-        1.0,
-        max(0.0, float(config["trhlina_hniloba_roundness_boundary"])),
-    )
-    
+
     # Determine which masks to generate
     if "all" in args.masks:
-        requested_masks = {'pozadi', 'kura', 'suk', 'hniloba', 'trhlina'}
+        requested_masks = set(MASK_NAMES)
     else:
         requested_masks = set(args.masks)
-    
-    print(f"Processing {args.output} masks: {', '.join(sorted(requested_masks))}")
+
+    print(f"Processing tree {args.tree} masks: {', '.join(sorted(requested_masks))}")
 
     for f_path in tqdm(files, desc="Processing"):
         try:
             img = iu.load_image(str(f_path))
-            mask_dict = build_masks(img, config, requested_masks)
+            mask_dict = build_masks(img, requested_masks)
         except Exception as exc:
             tqdm.write(f"[WARN] Failed to process {f_path}: {exc}")
             continue
@@ -361,15 +156,15 @@ def main():
         if not mask_dict:
             continue
 
-        rel = Path(str(f_path.relative_to(args.input)).replace("subset", ""))
-        
+        rel = Path(str(f_path.relative_to(input_dir)).replace("subset", ""))
+
         # Save generated masks
         for mask_name, mask in mask_dict.items():
-            mask_path = args.output / "masks" / mask_name / rel.with_suffix(".png")
+            mask_path = output_dir / "masks" / mask_name / rel.with_suffix(".png")
             mask_path.parent.mkdir(parents=True, exist_ok=True)
             cv2.imwrite(str(mask_path), mask)
 
-        img_path = args.output / "images" / rel
+        img_path = output_dir / "images" / rel
         img_path.parent.mkdir(parents=True, exist_ok=True)
         cv2.imwrite(str(img_path), img)
 
