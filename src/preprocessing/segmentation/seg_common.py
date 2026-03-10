@@ -3,6 +3,49 @@ import numpy as np
 import improutils as iu
 
 
+def kmeans_brightness_labels(image, k=4, attempts=10, seed=42):
+    """Run deterministic K-means and return labels sorted by cluster brightness.
+
+    Label meaning for ``k=4`` after sorting:
+    0 darkest, 1 second darkest, 2 second brightest, 3 brightest.
+    """
+    pixels = image.reshape((-1, 3)).astype(np.float32)
+    criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 10, 1.0)
+
+    cv2.setRNGSeed(int(seed))
+    _, labels, centers = cv2.kmeans(
+        pixels,
+        int(k),
+        None,
+        criteria,
+        int(attempts),
+        cv2.KMEANS_PP_CENTERS,
+    )
+
+    brightness = np.sum(centers, axis=1)
+    sort_indices = np.argsort(brightness)
+    sorted_centers = centers[sort_indices]
+
+    rank_map = np.zeros(int(k), dtype=np.int32)
+    for new_id, old_id in enumerate(sort_indices):
+        rank_map[old_id] = new_id
+
+    sorted_labels = rank_map[labels.flatten()].reshape(image.shape[:2])
+    return sorted_labels, sorted_centers
+
+
+def mask_from_cluster_ids(sorted_labels, cluster_ids, valid_mask=None):
+    """Build a binary mask from selected sorted K-means cluster ids."""
+    cluster_ids = list(cluster_ids)
+    mask = np.isin(sorted_labels, cluster_ids).astype(np.uint8) * 255
+
+    if valid_mask is not None:
+        valid_mask_bin = np.where(valid_mask > 0, 255, 0).astype(np.uint8)
+        mask = cv2.bitwise_and(mask, valid_mask_bin)
+
+    return mask
+
+
 def normalize_dataset_intensity(image, gamma=1.2):
     """Normalize brightness across datasets using histogram equalization + gamma correction."""
     gray = iu.to_gray(image)

@@ -10,7 +10,7 @@ package-mode = false
 python = "^3.10"
 pydicom = "^2.4"
 Pillow = "^10.0"
-numpy = "<2"
+numpy = "1.26.4"
 SimpleITK = "^2.3"
 improutils = "^1.2.1"
 tqdm = "^4.66"
@@ -25,6 +25,8 @@ nnunetv2 = "^2.6.2"
 torch = {version = "2.6.0+cu124", source = "pytorch-cu124"}
 torchvision = {version = "0.21.0+cu124", source = "pytorch-cu124"}
 torchaudio = {version = "2.6.0+cu124", source = "pytorch-cu124"}
+opencv-python = "4.9.0.80"
+opencv-contrib-python = "4.9.0.80"
 
 [tool.poetry.group.dev.dependencies]
 ipykernel = "^7.2.0"

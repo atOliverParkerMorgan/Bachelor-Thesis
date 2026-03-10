@@ -70,8 +70,7 @@ Generate segmentation masks for wood defects:
 
 ```bash
 poetry run python src/preprocessing/segmentation/segmentation.py \
-	--input src/png/dub1 \
-	--output src/output/dub1
+	--tree dub1
 ```
 
 **Selective Mask Generation:**
@@ -81,27 +80,19 @@ Generate only specific masks (saves processing time):
 ```bash
 # Generate only bark and background
 poetry run python src/preprocessing/segmentation/segmentation.py \
-	--input src/png/dub1 \
-	--output src/output/dub1 \
+	--tree dub1 \
 	--masks kura pozadi
 
 # Generate only cracks
 poetry run python src/preprocessing/segmentation/segmentation.py \
-	--input src/png/dub1 \
-	--output src/output/dub1 \
+	--tree dub1 \
 	--masks trhlina
 ```
 
-**Using Config Files:**
+Segmentation now uses a fixed pipeline with only two CLI inputs:
 
-You can pass a config file to customize segmentation parameters:
-
-```bash
-poetry run python src/preprocessing/segmentation/segmentation.py \
-	--config dub1 \
-	--input src/png/dub1 \
-	--output src/output/dub1
-```
+- `--tree` selects the source folder under `src/png/<tree>` and writes to `src/output/<tree>`
+- `--masks` selects which mask types to export
 
 **Output Masks:**
 
