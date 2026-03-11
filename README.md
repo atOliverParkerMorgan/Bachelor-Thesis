@@ -316,6 +316,8 @@ Resume training from checkpoint (continue from latest checkpoint_latest.pth):
 # Resume 2D training
 ./run_nnunet train --configuration 2d --fold 0 --plans-identifier nnUNetResEncUNetLPlans --continue-training
 
+
+/run_nnunet train --configuration 2d --fold 0 --plans-identifier nnUNetResEncUNetLPlans --continue-training --save-every 10 --initial-lr 0.003
 # Resume 3D training
 ./run_nnunet train --fold 0 --continue-training
 ```

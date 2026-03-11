@@ -7,7 +7,7 @@ from tqdm import tqdm
 import improutils as iu
 from .seg_kura import segment_crust, refine_kura_outer_crust
 from .seg_suk import segment_suk
-from .seg_pozadi import segment_background
+from .seg_pozadi import segment_background_and_inner_log
 from .seg_trhlina_and_hniloba import segment_trhlina, refine_trhlina_mask
 
 MASK_NAMES = ["pozadi", "kura", "suk", "hniloba", "trhlina"]
@@ -40,7 +40,7 @@ def build_masks(img, requested_masks=None):
     if requested_masks is None:
         requested_masks = set(MASK_NAMES)
     
-    background_mask = segment_background(img)
+    background_mask, inner_log_mask = segment_background_and_inner_log(img)
     log_mask = cv2.bitwise_not(background_mask)
     
     log_img = iu.apply_mask(img, log_mask)
@@ -100,6 +100,13 @@ def build_masks(img, requested_masks=None):
         results["hniloba"] = np.zeros_like(log_mask, dtype=np.uint8)
 
     if "pozadi" in requested_masks:
+        if kura_mask is not None:
+            combined_foreground = kura_mask
+            if trhlina_mask is not None:
+                combined_foreground = cv2.bitwise_or(kura_mask, trhlina_mask)
+            if hniloba_mask is not None:
+                combined_foreground = cv2.bitwise_or(kura_mask, hniloba_mask)
+            background_mask = cv2.bitwise_and(iu.negative(inner_log_mask), cv2.bitwise_not(combined_foreground))
         results["pozadi"] = background_mask
 
     return results
