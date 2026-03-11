@@ -56,6 +56,20 @@ def ensure_env(nnunet_root: Path) -> Dict[str, str]:
     return env
 
 
+def apply_runtime_toggles_to_env(env: Dict[str, str], args: argparse.Namespace) -> None:
+    """Apply optional runtime behavior toggles consumed by sitecustomize shims."""
+    save_every = getattr(args, "save_every", None)
+    if save_every is not None:
+        env["NNUNET_SAVE_EVERY"] = str(save_every)
+
+    initial_lr = getattr(args, "initial_lr", None)
+    if initial_lr is not None:
+        env["NNUNET_INITIAL_LR"] = str(initial_lr)
+
+    if getattr(args, "skip_arch_plot", False):
+        env["NNUNET_SKIP_ARCH_PLOT"] = "1"
+
+
 def _fmt_elapsed(seconds: float) -> str:
     total = int(round(seconds))
     mins, secs = divmod(total, 60)
@@ -408,6 +422,23 @@ def build_parser() -> argparse.ArgumentParser:
     )
     train.add_argument("--trainer", default=None, help="Optional custom trainer class name")
     train.add_argument(
+        "--save-every",
+        type=int,
+        default=10,
+        help="Save checkpoint_latest.pth every N epochs (default: 10).",
+    )
+    train.add_argument(
+        "--skip-arch-plot",
+        action="store_true",
+        help="Skip nnU-Net architecture plotting step (suppresses Graphviz/dot warnings).",
+    )
+    train.add_argument(
+        "--initial-lr",
+        type=float,
+        default=None,
+        help="Override trainer initial learning rate (for example: 0.003).",
+    )
+    train.add_argument(
         "--continue-training",
         action="store_true",
         help="Resume training from checkpoint_latest.pth (maps to nnUNetv2_train --c)",
@@ -471,6 +502,23 @@ def build_parser() -> argparse.ArgumentParser:
     )
     all_cmd.add_argument("--fold", default="0")
     all_cmd.add_argument(
+        "--save-every",
+        type=int,
+        default=10,
+        help="Save checkpoint_latest.pth every N epochs in the train step (default: 10).",
+    )
+    all_cmd.add_argument(
+        "--skip-arch-plot",
+        action="store_true",
+        help="Skip nnU-Net architecture plotting step during training.",
+    )
+    all_cmd.add_argument(
+        "--initial-lr",
+        type=float,
+        default=None,
+        help="Override trainer initial learning rate for the train step.",
+    )
+    all_cmd.add_argument(
         "--continue-training",
         action="store_true",
         help="Resume training from checkpoint_latest.pth in the training step (nnUNetv2_train --c)",
@@ -495,6 +543,7 @@ def main() -> None:
     parser = build_parser()
     args = parser.parse_args()
     env = ensure_env(args.nnunet_root)
+    apply_runtime_toggles_to_env(env, args)
 
     step_labels = {
         "prepare": ["prepare dataset"],
