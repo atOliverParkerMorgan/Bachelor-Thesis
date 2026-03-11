@@ -1,5 +1,23 @@
 import cv2
 import numpy as np
+from .seg_common import to_binary
+
+
+def get_solid_log_mask(log_mask):
+    """Create a solid log mask using only the convex hull of the largest contour."""
+    # Normalize to a binary mask before morphology/contour extraction.
+    binary_mask = to_binary(log_mask)
+
+    contours, _ = cv2.findContours(binary_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    if not contours:
+        return np.zeros_like(log_mask, dtype=np.uint8)
+
+    largest_contour = max(contours, key=cv2.contourArea)
+    hull = cv2.convexHull(largest_contour)
+
+    solid_mask = np.zeros_like(log_mask, dtype=np.uint8)
+    cv2.drawContours(solid_mask, [hull], -1, 255, thickness=cv2.FILLED)
+    return solid_mask
 
 
 def extract_log_mask(img, min_area, close_kernel_size):

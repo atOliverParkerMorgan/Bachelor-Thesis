@@ -27,6 +27,7 @@ torchvision = {version = "0.21.0+cu124", source = "pytorch-cu124"}
 torchaudio = {version = "2.6.0+cu124", source = "pytorch-cu124"}
 opencv-python = "4.9.0.80"
 opencv-contrib-python = "4.9.0.80"
+hiddenlayer = {git = "https://github.com/FabianIsensee/hiddenlayer.git"}
 
 [tool.poetry.group.dev.dependencies]
 ipykernel = "^7.2.0"

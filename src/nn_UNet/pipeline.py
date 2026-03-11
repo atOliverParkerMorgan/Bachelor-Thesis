@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Command wrappers for nnU-Net v2 using Dataset001 with 3D defaults."""
-
+#nnUNet_n_proc_DA=1 OMP_NUM_THREADS=2 MKL_NUM_THREADS=2 ./run_nnunet train --configuration 2d --fold 0 --plans-identifier nnUNetResEncUNetLPlans
 from __future__ import annotations
 
 import argparse
@@ -36,6 +36,7 @@ def ensure_env(nnunet_root: Path) -> Dict[str, str]:
     raw = nnunet_root / "nnUNet_raw"
     preprocessed = nnunet_root / "nnUNet_preprocessed"
     results = nnunet_root / "nnUNet_results"
+    project_root = Path(__file__).resolve().parents[2]
 
     raw.mkdir(parents=True, exist_ok=True)
     preprocessed.mkdir(parents=True, exist_ok=True)
@@ -44,6 +45,14 @@ def ensure_env(nnunet_root: Path) -> Dict[str, str]:
     env["nnUNet_raw"] = str(raw.resolve())
     env["nnUNet_preprocessed"] = str(preprocessed.resolve())
     env["nnUNet_results"] = str(results.resolve())
+    existing_pythonpath = env.get("PYTHONPATH", "")
+    root_str = str(project_root)
+    if existing_pythonpath:
+        parts = existing_pythonpath.split(os.pathsep)
+        if root_str not in parts:
+            env["PYTHONPATH"] = os.pathsep.join([root_str, existing_pythonpath])
+    else:
+        env["PYTHONPATH"] = root_str
     return env
 
 
@@ -398,6 +407,11 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     train.add_argument("--trainer", default=None, help="Optional custom trainer class name")
+    train.add_argument(
+        "--continue-training",
+        action="store_true",
+        help="Resume training from checkpoint_latest.pth (maps to nnUNetv2_train --c)",
+    )
 
     predict = subparsers.add_parser("predict", help="Run nnU-Net inference")
     predict.add_argument("--input", type=Path, required=True, help="Folder with *_0000.nii.gz inputs")
@@ -456,6 +470,11 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     all_cmd.add_argument("--fold", default="0")
+    all_cmd.add_argument(
+        "--continue-training",
+        action="store_true",
+        help="Resume training from checkpoint_latest.pth in the training step (nnUNetv2_train --c)",
+    )
     all_cmd.add_argument(
         "--plan-configurations",
         nargs="+",
@@ -578,6 +597,8 @@ def main() -> None:
             plans_identifier,
             *trainer_args,
         ]
+        if getattr(args, "continue_training", False):
+            cmd.append("--c")
         label = next_label("train model")
         started = start_step(label)
         log_resenc_citation_if_needed(plans_identifier)

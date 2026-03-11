@@ -1121,6 +1121,22 @@ files = [
 tests = ["pytest"]
 
 [[package]]
+name = "hiddenlayer"
+version = "0.2"
+description = "Neural network graphs and training metrics for PyTorch and TensorFlow"
+optional = false
+python-versions = "*"
+groups = ["main"]
+files = []
+develop = false
+
+[package.source]
+type = "git"
+url = "https://github.com/FabianIsensee/hiddenlayer.git"
+reference = "HEAD"
+resolved_reference = "b7263b6dc4569da1b6dea5964e1eac78fa32fa77"
+
+[[package]]
 name = "httpcore"
 version = "1.0.9"
 description = "A minimal low-level HTTP client."
@@ -5122,4 +5138,4 @@ PyYAML = "*"
 [metadata]
 lock-version = "2.1"
 python-versions = "^3.10"
-content-hash = "8cee421db0a462cee4502b4086ad0f03a79371f45d786e83662884cdf82e433a"
+content-hash = "d9127fa581f56886f2f99d91bebea5695b64888c20e8df75404e916015e0b14b"
