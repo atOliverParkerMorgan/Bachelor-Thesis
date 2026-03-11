@@ -2,6 +2,8 @@ import cv2
 import numpy as np
 import improutils as iu
 
+def to_binary(mask):
+    return np.where(mask > 0, 255, 0).astype(np.uint8)
 
 def kmeans_brightness_labels(image, k=4, attempts=10, seed=42):
     """Run deterministic K-means and return labels sorted by cluster brightness.
@@ -36,7 +38,10 @@ def kmeans_brightness_labels(image, k=4, attempts=10, seed=42):
 
 def mask_from_cluster_ids(sorted_labels, cluster_ids, valid_mask=None):
     """Build a binary mask from selected sorted K-means cluster ids."""
-    cluster_ids = list(cluster_ids)
+    if np.isscalar(cluster_ids):
+        cluster_ids = [int(cluster_ids)]
+    else:
+        cluster_ids = list(cluster_ids)
     mask = np.isin(sorted_labels, cluster_ids).astype(np.uint8) * 255
 
     if valid_mask is not None:
@@ -94,3 +99,37 @@ def fourier_bandpass_filter(image, min_freq, max_freq):
     filtered = np.fft.ifft2(f_ishift)
     filtered = np.abs(filtered)
     return cv2.normalize(filtered, None, 0, 255, cv2.NORM_MINMAX, dtype=cv2.CV_8U)
+
+
+
+def segment_using_superpixels_and_kmeans(img, k=4, attempts=10, seed=42, kmeans_labes=[0]):
+
+    # 2. SLIC Superpixels
+    blurred = cv2.GaussianBlur(img, (9, 9), 0)
+    slic = cv2.ximgproc.createSuperpixelSLIC(blurred, 
+                                             algorithm=cv2.ximgproc.SLIC, 
+                                             region_size=30, 
+                                             ruler=20.0)
+    slic.iterate(10)
+    
+    labels = slic.getLabels()
+    
+    # 3. Calculate average color per superpixel
+    number_of_superpixels = slic.getNumberOfSuperpixels()
+    avg_img = np.zeros_like(img)
+    for i in range(number_of_superpixels):
+        # Create a mask for the current superpixel and get its mean color
+        sp_mask = (labels == i).astype(np.uint8)
+        avg_img[labels == i] = cv2.mean(img, mask=sp_mask)[:3]
+
+    # 4. Apply your K-means sorting to the AVERAGED image
+    # This clusters the superpixels into 'k' distinct brightness tiers
+    k_labels, k_centers = kmeans_brightness_labels(avg_img, k=k)
+
+    # 5. Extract the target regions
+    # Since 0 is the darkest (likely the bark), and k-1 is the brightest (inner wood/background)
+    
+    # Let's create a mask for the darkest region (Label 0)
+    bark_mask = mask_from_cluster_ids(k_labels, kmeans_labes)
+            
+    return  bark_mask

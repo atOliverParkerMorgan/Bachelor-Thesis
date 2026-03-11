@@ -310,6 +310,16 @@ Train fold 0 using 3D full resolution (default configuration):
 ./run_nnunet train --fold 0
 ```
 
+Resume training from checkpoint (continue from latest checkpoint_latest.pth):
+
+```bash
+# Resume 2D training
+./run_nnunet train --configuration 2d --fold 0 --plans-identifier nnUNetResEncUNetLPlans --continue-training
+
+# Resume 3D training
+./run_nnunet train --fold 0 --continue-training
+```
+
 Or run all three steps in one command:
 
 ```bash
@@ -337,16 +347,10 @@ nnUNet_n_proc_DA=1 OMP_NUM_THREADS=4 MKL_NUM_THREADS=4 \
 ./run_nnunet train --resenc-preset L --configuration 3d_lowres --fold 0 --trainer nnUNetTrainer_50epochs
 ```
 
-Use this when you are away and want a full run (higher load, better final quality):
+Use this when you are away and want a full run (higher load, better final quality), or to resume an existing 2D training run:
 
 ```bash
-./run_nnunet train --resenc-preset L --configuration 3d_lowres --fold 0
-```
-
-Optional full-speed cross-validation while away:
-
-```bash
-./run_nnunet train --resenc-preset L --configuration 3d_lowres --fold all
+nnUNet_n_proc_DA=4 OMP_NUM_THREADS=4 MKL_NUM_THREADS=4 ./run_nnunet train --configuration 2d --fold 0 --plans-identifier nnUNetResEncUNetLPlans --continue-training
 ```
 
 By default, `run_nnunet train` prefers the plans matching your preset (`nnUNetResEncUNetM/L/XLPlans`).
