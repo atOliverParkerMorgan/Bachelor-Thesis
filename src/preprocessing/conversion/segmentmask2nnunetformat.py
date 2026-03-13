@@ -15,7 +15,6 @@ import numpy as np
 import SimpleITK as sitk
 from PIL import Image
 
-
 BACKGROUND_ALIASES = {"background", "pozadi"}
 
 
@@ -36,8 +35,8 @@ def make_safe_label_name(name: str) -> str:
 
 def parse_labelmap(labelmap_path: Path) -> List[LabelEntry]:
     labels: List[LabelEntry] = []
-    with labelmap_path.open("r", encoding="utf-8") as f:
-        for raw_line in f:
+    with labelmap_path.open("r", encoding="utf-8") as file_handle:
+        for raw_line in file_handle:
             line = raw_line.strip()
             if not line or line.startswith("#"):
                 continue
@@ -46,7 +45,7 @@ def parse_labelmap(labelmap_path: Path) -> List[LabelEntry]:
                 continue
             name = parts[0].strip()
             rgb_text = parts[1].strip()
-            rgb_values = tuple(int(v.strip()) for v in rgb_text.split(","))
+            rgb_values = tuple(int(value.strip()) for value in rgb_text.split(","))
             if len(rgb_values) != 3:
                 raise ValueError(f"Invalid RGB mapping in {labelmap_path}: {line}")
             labels.append(LabelEntry(name, make_safe_label_name(name), rgb_values))
@@ -58,11 +57,11 @@ def parse_labelmap(labelmap_path: Path) -> List[LabelEntry]:
 def parse_slice_list(series_dir: Path, series_name: str) -> List[str]:
     list_path = series_dir / "ImageSets" / "Segmentation" / f"{series_name}.txt"
     if not list_path.exists():
-        # Fallback to all files if ImageSets list does not exist.
-        return sorted(p.stem for p in (series_dir / "SegmentationObject").glob("*.png"))
+        return sorted(path.stem for path in (series_dir / "SegmentationObject").glob("*.png"))
+
     items: List[str] = []
-    with list_path.open("r", encoding="utf-8") as f:
-        for raw_line in f:
+    with list_path.open("r", encoding="utf-8") as file_handle:
+        for raw_line in file_handle:
             item = raw_line.strip()
             if item:
                 items.append(item)
@@ -75,8 +74,9 @@ def load_spacing(geometry_root: Path, series_name: str) -> Tuple[float, float, f
     geom_path = geometry_root / series_name / "geometry.json"
     if not geom_path.exists():
         return (1.0, 1.0, 1.0)
-    with geom_path.open("r", encoding="utf-8") as f:
-        geometry = json.load(f)
+
+    with geom_path.open("r", encoding="utf-8") as file_handle:
+        geometry = json.load(file_handle)
     spacing = geometry.get("spacing")
     if not isinstance(spacing, list) or len(spacing) != 3:
         return (1.0, 1.0, 1.0)
@@ -98,13 +98,12 @@ def convert_mask_rgb_to_ids(
     color_to_id: Dict[Tuple[int, int, int], int],
     source_path: Path,
 ) -> np.ndarray:
-    h, w, _ = mask_rgb.shape
-    mask_ids = np.zeros((h, w), dtype=np.uint8)
-
+    mask_ids = np.zeros(mask_rgb.shape[:2], dtype=np.uint8)
     flat_rgb = mask_rgb.reshape(-1, 3)
     unique_colors = np.unique(flat_rgb, axis=0)
+
     for color_arr in unique_colors:
-        color = tuple(int(v) for v in color_arr.tolist())
+        color = tuple(int(value) for value in color_arr.tolist())
         if color not in color_to_id:
             raise ValueError(f"Unknown label color {color} in {source_path}")
         class_id = color_to_id[color]
@@ -125,7 +124,7 @@ def generate_subvolumes(
     patch_size: Tuple[int, int, int] = (96, 256, 96),
     stride: Tuple[int, int, int] = (64, 128, 64),
 ) -> Iterable[Tuple[np.ndarray, np.ndarray]]:
-    """Split a 3D volume into overlapping sub-volumes of fixed size."""
+    """Split a 3D volume into overlapping fixed-size sub-volumes."""
     if image_volume.shape != label_volume.shape:
         raise ValueError(
             "Image/label shape mismatch before patching: "
@@ -141,16 +140,13 @@ def generate_subvolumes(
     if sz <= 0 or sy <= 0 or sx <= 0:
         raise ValueError(f"Invalid stride: {stride}")
 
-    for z in range(0, max(1, z_max - pz + 1), sz):
-        for y in range(0, max(1, y_max - py + 1), sy):
-            for x in range(0, max(1, x_max - px + 1), sx):
-                img_patch = image_volume[z : z + pz, y : y + py, x : x + px]
-                lbl_patch = label_volume[z : z + pz, y : y + py, x : x + px]
-
-                # Keep only full-size patches to preserve a consistent case shape.
+    for z_idx in range(0, max(1, z_max - pz + 1), sz):
+        for y_idx in range(0, max(1, y_max - py + 1), sy):
+            for x_idx in range(0, max(1, x_max - px + 1), sx):
+                img_patch = image_volume[z_idx : z_idx + pz, y_idx : y_idx + py, x_idx : x_idx + px]
+                lbl_patch = label_volume[z_idx : z_idx + pz, y_idx : y_idx + py, x_idx : x_idx + px]
                 if img_patch.shape != patch_size or lbl_patch.shape != patch_size:
                     continue
-
                 yield img_patch, lbl_patch
 
 
@@ -177,14 +173,12 @@ def prepare_dataset(
     images_tr.mkdir(parents=True, exist_ok=True)
     labels_tr.mkdir(parents=True, exist_ok=True)
 
-    # Always clear old generated training files to avoid mixing legacy full volumes
-    # with patch-based cases when rerunning without --overwrite.
     for old_file in images_tr.glob("*.nii.gz"):
         old_file.unlink()
     for old_file in labels_tr.glob("*.nii.gz"):
         old_file.unlink()
 
-    series_dirs = sorted(p for p in source_root.iterdir() if p.is_dir() and p.name.startswith("dub"))
+    series_dirs = sorted(path for path in source_root.iterdir() if path.is_dir() and path.name.startswith("dub"))
     if not series_dirs:
         raise ValueError(f"No dub* folders found in {source_root}")
 
@@ -193,7 +187,6 @@ def prepare_dataset(
     labels_dict: Dict[str, int] = {"background": 0}
     training_cases: List[str] = []
 
-    # nnU-Net requires 0 to be background. We treat legacy "pozadi" as background.
     next_id = 1
     for entry in ref_labels:
         if entry.safe_name in BACKGROUND_ALIASES:
@@ -209,8 +202,8 @@ def prepare_dataset(
     for series_dir in series_dirs:
         series_name = series_dir.name
         current_labels = parse_labelmap(series_dir / "labelmap.txt")
-        if [(e.original_name, e.color) for e in current_labels] != [
-            (e.original_name, e.color) for e in ref_labels
+        if [(entry.original_name, entry.color) for entry in current_labels] != [
+            (entry.original_name, entry.color) for entry in ref_labels
         ]:
             raise ValueError(f"Label map mismatch in {series_dir / 'labelmap.txt'}")
 
@@ -237,7 +230,9 @@ def prepare_dataset(
         label_volume = np.stack(label_slices, axis=0).astype(np.uint8)
 
         if image_volume.shape != label_volume.shape:
-            raise ValueError(f"Image/label shape mismatch in {series_name}: {image_volume.shape} vs {label_volume.shape}")
+            raise ValueError(
+                f"Image/label shape mismatch in {series_name}: {image_volume.shape} vs {label_volume.shape}"
+            )
 
         case_counter = 0
         for img_patch, lbl_patch in generate_subvolumes(
@@ -274,8 +269,8 @@ def prepare_dataset(
         "file_ending": ".nii.gz",
         "overwrite_image_reader_writer": "SimpleITKIO",
     }
-    with (dataset_root / "dataset.json").open("w", encoding="utf-8") as f:
-        json.dump(dataset_json, f, indent=2)
+    with (dataset_root / "dataset.json").open("w", encoding="utf-8") as file_handle:
+        json.dump(dataset_json, file_handle, indent=2)
 
     return dataset_root
 
