@@ -86,6 +86,32 @@ def upload_dataset(client: Client, project_id: int, file_path: Path, format_name
         return False
 
 
+def upload_specific_file(
+    file_path: Path,
+    organization: Optional[str] = None,
+    format_name: str = "Datumaro 1.0",
+) -> bool:
+    """Upload one Datumaro zip directly using the same env-based CVAT configuration."""
+    load_dotenv()
+
+    cvat_token = os.getenv("CVAT_TOKEN")
+    cvat_project_id = os.getenv("CVAT_PROJECT_ID")
+    cvat_url = os.getenv("CVAT_URL", "https://app.cvat.ai")
+    cvat_org = organization or os.getenv("CVAT_ORGANIZATION", "BP")
+
+    if not all([cvat_token, cvat_project_id]):
+        raise RuntimeError("CVAT_TOKEN and CVAT_PROJECT_ID are required in the environment.")
+    if not file_path.exists():
+        raise FileNotFoundError(f"Datumaro archive does not exist: {file_path}")
+
+    config = Config()
+    with Client(url=cvat_url, config=config) as client:
+        client.login(AccessTokenCredentials(cvat_token))
+        if cvat_org:
+            client.organization_slug = cvat_org
+        return upload_dataset(client, int(cvat_project_id), file_path, format_name=format_name)
+
+
 def main():
     parser = argparse.ArgumentParser(description="Import Datumaro datasets to CVAT (High-Level SDK)")
     parser.add_argument("-f", "--file", help="Specific file to upload")

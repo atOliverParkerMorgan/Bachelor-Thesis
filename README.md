@@ -8,7 +8,7 @@ Utilities for converting DICOM/IMA series to PNG slices (with geometry metadata)
 - [src/preprocessing/conversion/png2ima.py](src/preprocessing/conversion/png2ima.py) — PNG slices + geometry.json → .nii.gz
 - [src/preprocessing/conversion/mask2datumaro.py](src/preprocessing/conversion/mask2datumaro.py) — Segmentation masks → Datumaro format
 - [src/preprocessing/segmentation/segmentation.py](src/preprocessing/segmentation/segmentation.py) — Wood defect segmentation
-- [src/preprocessing/segmentation/config/](src/preprocessing/segmentation/config/) — Per-series segmentation configs
+- [src/preprocessing/segmentation/seg_config.py](src/preprocessing/segmentation/seg_config.py) — Segmentation parameter defaults
 - [run](run) — Full automated pipeline script
 - [src/ground_truth](src/ground_truth) — Sample input data (IMA files)
 
@@ -180,11 +180,9 @@ Then use `./run --upload` to automatically upload results.
 
 **Segmentation Configs:**
 
-Per-series configuration files are in [src/preprocessing/segmentation/config/](src/preprocessing/segmentation/config/):
-- `dub1.config`, `dub2.config`, `dub3.config`, `dub4.config` — Series-specific parameters
-- `optimized.config` — Baseline optimized parameters
+Segmentation defaults are defined in [src/preprocessing/segmentation/seg_config.py](src/preprocessing/segmentation/seg_config.py).
 
-Example config structure:
+Example parameter structure:
 ```ini
 [segmentation]
 # Log extraction
@@ -234,14 +232,12 @@ poetry run python src/preprocessing/conversion/ima2png.py --target src/ground_tr
 ./run --upload
 ```
 
-**Example 5: Custom segmentation parameters**
+**Example 5: Segmentation for one tree with selected masks**
 ```bash
-# Use optimized config for a specific series
+# Run segmentation for one tree and export only selected masks
 poetry run python src/preprocessing/segmentation/segmentation.py \
-	--config optimized \
-	--input src/png/dub2 \
-	--output src/output/dub2 \
-	--masks all
+	--tree dub2 \
+	--masks kura trhlina
 ```
 
 **Example 6: Upload to cvat**
@@ -255,7 +251,7 @@ poetry run python src/preprocessing/segmentation/segmentation.py \
 
 ## nnU-Net v2 (3D) Integration
 
-This repository now includes a dedicated nnU-Net pipeline under `src/nn_unet/` with defaults tuned for `3d_fullres`.
+This repository now includes a dedicated nnU-Net pipeline under `src/nn_UNet/` with defaults tuned for `3d_fullres`.
 
 Residual Encoder presets are supported (`M`, `L`, `XL`) and default to `L`.
 When using these presets, please cite:
@@ -266,15 +262,16 @@ arXiv:2404.09556.
 
 ### Layout
 
-- `src/nn_unet/prepare_dataset001.py` - converts `datasets/Dataset001/dub*` slices into nnU-Net raw NIfTI volumes
-- `src/nn_unet/pipeline.py` - wrappers for prepare, plan/preprocess, train, and predict
-- `run_nnunet` - convenience launcher (`poetry run python src/nn_unet/pipeline.py ...`)
+- `src/preprocessing/conversion/segmentmask2nnunetformat.py` - converts `datasets/Dataset001/dub*` slices into nnU-Net raw NIfTI volumes
+- `src/nn_UNet/prepare_dataset_to_nnunet_format.py` - converts one `src/png/dub*` tree to NIfTI inputs, restores predicted masks, and supports Datumaro/CVAT export
+- `src/nn_UNet/pipeline.py` - wrappers for prepare, plan/preprocess, train, and predict
+- `run_nnunet` - convenience launcher (`poetry run python src/nn_UNet/pipeline.py ...`)
 
 Prepared nnU-Net data will be stored in:
 
-- `src/nn_unet/nnunet_data/nnUNet_raw/`
-- `src/nn_unet/nnunet_data/nnUNet_preprocessed/`
-- `src/nn_unet/nnunet_data/nnUNet_results/`
+- `src/nn_UNet/nnunet_data/nnUNet_raw/`
+- `src/nn_UNet/nnunet_data/nnUNet_preprocessed/`
+- `src/nn_UNet/nnunet_data/nnUNet_results/`
 
 ### Train on Dataset001 (3D)
 
@@ -315,11 +312,27 @@ Resume training from checkpoint (continue from latest checkpoint_latest.pth):
 ```bash
 # Resume 2D training
 ./run_nnunet train --configuration 2d --fold 0 --plans-identifier nnUNetResEncUNetLPlans --continue-training
-
-
-/run_nnunet train --configuration 2d --fold 0 --plans-identifier nnUNetResEncUNetLPlans --continue-training --save-every 10 --initial-lr 0.003
+./run_nnunet train --configuration 2d --fold 0 --plans-identifier nnUNetResEncUNetLPlans --continue-training --save-every 10 --initial-lr 0.003
 # Resume 3D training
 ./run_nnunet train --fold 0 --continue-training
+```
+
+Predict a whole tree, write segmentation-style masks to `src/output/<tree>`, and create a Datumaro zip. If `src/png/<tree>` is missing, the command first converts the matching source from `src/ground_truth` using the preprocessing conversion pipeline:
+
+```bash
+./run_nnunet predict-tree --tree dub5 --configuration 2d --fold 0 --plans-identifier nnUNetResEncUNetLPlans --make-datumaro
+```
+
+You can also point it at a different ground-truth root if needed:
+
+```bash
+./run_nnunet predict-tree --tree dub5 --ground-truth-root path/to/ground_truth --configuration 2d --fold 0 --plans-identifier nnUNetResEncUNetLPlans --make-datumaro
+```
+
+Upload that Datumaro archive to CVAT using the existing `.env` settings:
+
+```bash
+./run_nnunet predict-tree --tree dub5 --configuration 2d --fold 0 --plans-identifier nnUNetResEncUNetLPlans --upload-cvat
 ```
 
 Or run all three steps in one command:
@@ -375,7 +388,7 @@ Inference expects nnU-Net style input files named like `case_0000.nii.gz` in an 
 - Geometry metadata is saved as geometry.json at the series root
 - Segmentation supports selective mask generation to optimize processing time
 - Crack detection uses gradient-based analysis with geometric descriptor filtering
-- Config files allow per-series parameter tuning (see [config/](src/preprocessing/segmentation/config/))
+- Segmentation parameters are defined in `src/preprocessing/segmentation/seg_config.py`
 - The pipeline intelligently skips steps when output already exists
 - Datumaro export automatically handles partial mask sets
 
