@@ -16,12 +16,6 @@ def refine_kura_outer_crust(raw_kura_mask, log_mask, crust_band, outer_ring, trh
    kura_candidate = cv2.bitwise_and(to_binary(raw_kura_mask), to_binary(log_mask))
    labels_count, labels, stats, _ = cv2.connectedComponentsWithStats(kura_candidate, connectivity=8)
 
-   outer_ring_dilated = cv2.dilate(
-      to_binary(outer_ring),
-      cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7)),
-      iterations=1,
-   )
-
    kept = np.zeros_like(kura_candidate)
    for label in range(1, labels_count):
       area = int(stats[label, cv2.CC_STAT_AREA])
@@ -29,7 +23,7 @@ def refine_kura_outer_crust(raw_kura_mask, log_mask, crust_band, outer_ring, trh
          continue
 
       component = np.where(labels == label, 255, 0).astype(np.uint8)
-      boundary_overlap = int(cv2.countNonZero(cv2.bitwise_and(component, outer_ring_dilated)))
+      boundary_overlap = int(cv2.countNonZero(cv2.bitwise_and(component, outer_ring)))
       overlap_ratio = boundary_overlap / float(area)
 
       if boundary_overlap >= KURA_MIN_BOUNDARY_OVERLAP_PIXELS or overlap_ratio >= KURA_MIN_BOUNDARY_OVERLAP_RATIO:

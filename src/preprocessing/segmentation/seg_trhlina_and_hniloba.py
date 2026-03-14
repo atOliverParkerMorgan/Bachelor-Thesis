@@ -28,24 +28,19 @@ def segment_trhlina(img, k=5):
     
     # Denoise while preserving crack edges.
     filtered = cv2.bilateralFilter(enhanced, d=9, sigmaColor=120, sigmaSpace=75)
-    
     # Run K-means using a 3-channel representation expected by shared helpers.
     filtered_3c = cv2.cvtColor(filtered, cv2.COLOR_GRAY2BGR)
     
     k_labels, _k_centers = kmeans_brightness_labels(filtered_3c, k=k)
     initial_mask = mask_from_cluster_ids(k_labels, [k - 1, k - 2])
     
-    # Bridge tiny discontinuities in thin crack lines.
-    kernel_close = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
-    clean_init_mask = cv2.morphologyEx(initial_mask, cv2.MORPH_CLOSE, kernel_close)
-    
     # Chan-Vese expects normalized image and binary initialization.
     gray_float = gray.astype(np.float32) / 255.0
-    init_level_set = (clean_init_mask > 0).astype(np.float32)
+    init_level_set = (initial_mask > 0).astype(np.float32)
     
     snake_mask_float = morphological_chan_vese(
         gray_float,
-        num_iter=25,
+        num_iter=9,
         init_level_set=init_level_set,
         smoothing=0,
     )
@@ -54,111 +49,64 @@ def segment_trhlina(img, k=5):
 
 
 def refine_trhlina_mask(raw_trhlina_mask, log_mask, outer_ring, background_mask):
-    """Remove unlikely crack components using contour shape and position filters."""
-    candidate = cv2.bitwise_and(to_binary(raw_trhlina_mask), to_binary(log_mask))
-    contours, _ = cv2.findContours(candidate, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    log_area = max(1, int(cv2.countNonZero(to_binary(log_mask))))
+    # Restrict to log interior, exclude background.
+    masked = cv2.bitwise_and(raw_trhlina_mask, log_mask)
+    masked = cv2.bitwise_and(masked, cv2.bitwise_not(background_mask))
+    masked = cv2.bitwise_and(masked, cv2.bitwise_not(outer_ring))
+    trhlina_mask = np.zeros_like(masked)
+    hniloba_mask = np.zeros_like(masked)
 
-    filtered = np.zeros_like(candidate)
-    for contour in contours:
-        area = cv2.contourArea(contour)
+    log_area = int(np.count_nonzero(log_mask))
+
+    contours, _ = cv2.findContours(masked, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+    for cnt in contours:
+        area = cv2.contourArea(cnt)
         if area < TRHLINA_MIN_COMPONENT_AREA:
             continue
-        if (area / float(log_area)) > TRHLINA_MAX_COMPONENT_AREA_RATIO:
-            continue
 
-        perimeter = cv2.arcLength(contour, True)
-        if perimeter <= 0:
-            continue
+        # Draw filled component for overlap queries.
+        comp_mask = np.zeros_like(masked)
+        cv2.drawContours(comp_mask, [cnt], -1, 255, cv2.FILLED)
 
-        circularity = float((4.0 * np.pi * area) / (perimeter * perimeter))
-        x, y, w, h = cv2.boundingRect(contour)
-        if w <= 0 or h <= 0:
-            continue
+        # Fraction of this component that falls inside the outer ring.
+        overlap_px = int(np.count_nonzero(cv2.bitwise_and(comp_mask, outer_ring)))
+        outer_overlap = overlap_px / area if area > 0 else 0.0
 
-        aspect_ratio = float(max(w, h)) / float(max(1, min(w, h)))
-        extent = float(area) / float(w * h)
+        # Perimeter-based circularity (1 = perfect circle, lower = elongated).
+        perimeter = cv2.arcLength(cnt, True)
+        circularity = (4 * np.pi * area / perimeter ** 2) if perimeter > 0 else 0.0
 
-        component = np.zeros_like(candidate)
-        cv2.drawContours(component, [contour], -1, 255, thickness=-1)
-        comp_pixels = int(cv2.countNonZero(component))
-        if comp_pixels == 0:
-            continue
+        # Bounding-rect aspect ratio and extent.
+        _x, _y, w, h = cv2.boundingRect(cnt)
+        rect_min = min(w, h)
+        aspect_ratio = max(w, h) / rect_min if rect_min > 0 else 1.0
+        extent = area / (w * h) if w * h > 0 else 0.0
 
-        outer_overlap = int(cv2.countNonZero(cv2.bitwise_and(component, outer_ring))) / float(comp_pixels)
-
-        elongated = aspect_ratio >= TRHLINA_MIN_ASPECT_RATIO and circularity <= TRHLINA_MAX_CIRCULARITY
-        thin_irregular = circularity <= 0.32 and extent <= TRHLINA_MAX_EXTENT
-        not_outer_round_noise = outer_overlap <= TRHLINA_MAX_OUTER_RING_OVERLAP
-
-        if (elongated or thin_irregular) and not_outer_round_noise:
-            cv2.drawContours(filtered, [contour], -1, 255, thickness=-1)
-
-    close_kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
-    filtered = cv2.morphologyEx(filtered, cv2.MORPH_CLOSE, close_kernel)
-
-    # Separate the final mask to trhlina and hniloba based on major axis direction
-    # relative to log center.
-    contours, _ = cv2.findContours(filtered, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    trhlina_mask = np.zeros_like(filtered)
-    hniloba_mask = np.zeros_like(filtered)
-
-    log_binary = to_binary(log_mask)
-    moments = cv2.moments(log_binary)
-    if moments["m00"] > 0:
-        log_center = np.array(
-            [moments["m10"] / moments["m00"], moments["m01"] / moments["m00"]],
-            dtype=np.float32,
-        )
-    else:
-        h, w = log_binary.shape[:2]
-        log_center = np.array([w / 2.0, h / 2.0], dtype=np.float32)
-
-    for contour in contours:
-        rect = cv2.minAreaRect(contour)
-        comp_center = np.array(rect[0], dtype=np.float32)
-
-        # If there is no clear major axis, keep it as hniloba.
-        aspect_ratio_min_over_max = float(iu.aspect_ratio(contour))
-        has_major_axis = aspect_ratio_min_over_max <= (1.0 / TRHLINA_MIN_MAJOR_TO_MINOR_RATIO)
-        if not has_major_axis:
-            cv2.drawContours(hniloba_mask, [contour], -1, 255, thickness=-1)
-            continue
-
-        box = cv2.boxPoints(rect).astype(np.float32)
-        longest_edge = None
-        longest_len = 0.0
-        for i in range(4):
-            edge = box[(i + 1) % 4] - box[i]
-            edge_len = float(np.linalg.norm(edge))
-            if edge_len > longest_len:
-                longest_len = edge_len
-                longest_edge = edge
-
-        if longest_edge is None or longest_len <= 1e-6:
-            cv2.drawContours(hniloba_mask, [contour], -1, 255, thickness=-1)
-            continue
-
-        axis_unit = longest_edge / longest_len
-        to_center = log_center - comp_center
-
-        # Trhlina usually follows a radial direction, so the line through the major
-        # axis should pass near the log center.
-        perp_dist_to_axis = abs(float(axis_unit[0] * to_center[1] - axis_unit[1] * to_center[0]))
-        minor_axis_len = max(1.0, float(longest_len * aspect_ratio_min_over_max))
-        max_allowed_perp_dist = TRHLINA_CENTERLINE_MAX_MINOR_FACTOR * minor_axis_len
-
-        if perp_dist_to_axis <= max_allowed_perp_dist:
-            cv2.drawContours(trhlina_mask, [contour], -1, 255, thickness=-1)
+        # Ellipse major-to-minor ratio (more stable than bounding rect for skewed shapes).
+        if len(cnt) >= 5:
+            _center, (axis_a, axis_b), _angle = cv2.fitEllipse(cnt)
+            ax_min = min(axis_a, axis_b)
+            major_to_minor = max(axis_a, axis_b) / ax_min if ax_min > 0 else 1.0
         else:
-            cv2.drawContours(hniloba_mask, [contour], -1, 255, thickness=-1)
-    
-    background_mask_dilated = cv2.dilate(
-        to_binary(background_mask),
-        cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (9, 9)),
-        iterations=1,
-    )
+            major_to_minor = aspect_ratio
 
-    trhlina_mask = cv2.bitwise_and(trhlina_mask, cv2.bitwise_not(background_mask_dilated))
+        # Large dark blobs that fill much of the log are rot, not cracks.
+        area_ratio = area / log_area if log_area > 0 else 0.0
+
+        # Trhlina (crack): elongated, low circularity, not dominated by outer bark.
+        is_trhlina = (
+            circularity <= TRHLINA_MAX_CIRCULARITY
+            and aspect_ratio >= TRHLINA_MIN_ASPECT_RATIO
+            and extent <= TRHLINA_MAX_EXTENT
+            and major_to_minor >= TRHLINA_MIN_MAJOR_TO_MINOR_RATIO
+            and outer_overlap <= TRHLINA_MAX_OUTER_RING_OVERLAP
+            and area_ratio <= TRHLINA_MAX_COMPONENT_AREA_RATIO
+        )
+
+        if is_trhlina:
+            cv2.drawContours(trhlina_mask, [cnt], -1, 255, cv2.FILLED)
+        else:
+            cv2.drawContours(hniloba_mask, [cnt], -1, 255, cv2.FILLED)
 
     return trhlina_mask, hniloba_mask
