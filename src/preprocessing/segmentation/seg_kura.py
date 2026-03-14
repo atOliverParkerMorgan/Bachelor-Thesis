@@ -7,7 +7,7 @@ KURA_MIN_COMPONENT_AREA = 80
 KURA_MIN_BOUNDARY_OVERLAP_RATIO = 0.01
 KURA_MIN_BOUNDARY_OVERLAP_PIXELS = 40
 
-def segment_crust(img, k=10, attempts=10, seed=42):
+def segment_crust(img, k=10, attempts=5, seed=42):
    return segment_using_superpixels_and_kmeans(img, k, attempts, seed, [1,2,3])
 
 

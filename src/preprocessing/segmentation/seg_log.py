@@ -22,7 +22,7 @@ def get_solid_log_mask(log_mask):
 
 def extract_log_mask(img, min_area, close_kernel_size):
     """Find the overall mask of the entire log slice."""
-    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    gray = img if img.ndim == 2 else cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
     _, bw = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
 
     if close_kernel_size and close_kernel_size > 0:
