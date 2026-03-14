@@ -303,6 +303,44 @@ def resolve_prediction_checkpoint(
     return None
 
 
+def detect_gpu_vram_gb() -> float | None:
+    if shutil.which("nvidia-smi") is None:
+        return None
+
+    try:
+        output = subprocess.check_output(
+            [
+                "nvidia-smi",
+                "--query-gpu=memory.total",
+                "--format=csv,noheader,nounits",
+            ],
+            text=True,
+            timeout=3,
+        )
+        values = [line.strip() for line in output.splitlines() if line.strip()]
+        if not values:
+            return None
+        memory_mib = max(int(value) for value in values)
+        return memory_mib / 1024.0
+    except Exception:
+        return None
+
+
+def prediction_worker_profile(vram_gb: float | None) -> tuple[int, int]:
+    """Choose npp/nps to maximize speed while keeping VRAM usage reasonable."""
+    if vram_gb is None:
+        return 2, 2
+    if vram_gb >= 16:
+        return 6, 6
+    if vram_gb >= 12:
+        return 4, 4
+    if vram_gb >= 8:
+        return 3, 3
+    if vram_gb >= 6:
+        return 2, 2
+    return 1, 1
+
+
 def build_parser() -> argparse.ArgumentParser:
     def add_hidden_legacy_planner_args(subparser: argparse.ArgumentParser) -> None:
         # Keep backward compatibility for scripts that still pass these options,
@@ -469,11 +507,22 @@ def run_predict(args: argparse.Namespace, env: Dict[str, str]) -> None:
     if checkpoint_name is not None:
         cmd.extend(["-chk", checkpoint_name])
         log(f"Using prediction checkpoint: {checkpoint_name}")
+
+    # TTA improves robustness by averaging multiple augmented predictions,
+    # but it substantially slows inference. Keep it off for fast predictions.
+    cmd.append("--disable_tta")
+    vram_gb = detect_gpu_vram_gb()
+    npp, nps = prediction_worker_profile(vram_gb)
+    cmd.extend(["-npp", str(npp), "-nps", str(nps)])
+    if vram_gb is not None:
+        log(f"Fast predict profile: disable_tta, npp={npp}, nps={nps} (GPU VRAM ~{vram_gb:.1f} GB)")
+    else:
+        log(f"Fast predict profile: disable_tta, npp={npp}, nps={nps} (GPU VRAM unknown)")
     run_cmd(cmd, env, "predict")
 
 
 def run_predict_tree(args: argparse.Namespace, env: Dict[str, str]) -> None:
-    from src.nn_UNet.prepare_dataset_to_nnunet_format import (
+    from src.preprocessing.conversion.nnunet_predict import (
         default_datumaro_output,
         export_datumaro_for_tree,
         export_prediction_masks,
@@ -530,6 +579,15 @@ def run_predict_tree(args: argparse.Namespace, env: Dict[str, str]) -> None:
     if checkpoint_name is not None:
         cmd.extend(["-chk", checkpoint_name])
         log(f"Using prediction checkpoint: {checkpoint_name}")
+
+    cmd.append("--disable_tta")
+    vram_gb = detect_gpu_vram_gb()
+    npp, nps = prediction_worker_profile(vram_gb)
+    cmd.extend(["-npp", str(npp), "-nps", str(nps)])
+    if vram_gb is not None:
+        log(f"Fast predict-tree profile: disable_tta, npp={npp}, nps={nps} (GPU VRAM ~{vram_gb:.1f} GB)")
+    else:
+        log(f"Fast predict-tree profile: disable_tta, npp={npp}, nps={nps} (GPU VRAM unknown)")
     run_cmd(cmd, env, "predict-tree")
 
     export_prediction_masks(

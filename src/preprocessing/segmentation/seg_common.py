@@ -5,7 +5,12 @@ import improutils as iu
 def to_binary(mask):
     return np.where(mask > 0, 255, 0).astype(np.uint8)
 
-def kmeans_brightness_labels(image, k=4, attempts=10, seed=42):
+def apply_clahe(gray_img, clip_limit=2.0, tile_grid=(8, 8)):
+    """Apply Contrast Limited Adaptive Histogram Equalization."""
+    clahe = cv2.createCLAHE(clipLimit=clip_limit, tileGridSize=tile_grid)
+    return clahe.apply(gray_img)
+
+def kmeans_brightness_labels(image, k=4, attempts=3, seed=42):
     """Run deterministic K-means and return labels sorted by cluster brightness.
 
     Label meaning for ``k=4`` after sorting:
@@ -51,22 +56,6 @@ def mask_from_cluster_ids(sorted_labels, cluster_ids, valid_mask=None):
     return mask
 
 
-def normalize_dataset_intensity(image, gamma=1.2):
-    """Normalize brightness across datasets using histogram equalization + gamma correction."""
-    gray = iu.to_gray(image)
-    gray_norm = cv2.normalize(gray, None, 0, 255, cv2.NORM_MINMAX, dtype=cv2.CV_8U)
-    equalized = cv2.equalizeHist(gray_norm)
-
-    gamma = max(0.1, float(gamma))
-    if abs(gamma - 1.0) < 1e-6:
-        return equalized
-
-    lut = np.array([
-        ((i / 255.0) ** (1.0 / gamma)) * 255 for i in range(256)
-    ], dtype=np.uint8)
-    return cv2.LUT(equalized, lut)
-
-
 def fourier_bandpass_filter(image, min_freq, max_freq):
     """Apply circular band-pass filtering in frequency domain and return grayscale output."""
     gray = iu.to_gray(image)
@@ -101,10 +90,9 @@ def fourier_bandpass_filter(image, min_freq, max_freq):
     return cv2.normalize(filtered, None, 0, 255, cv2.NORM_MINMAX, dtype=cv2.CV_8U)
 
 
-
-def segment_using_superpixels_and_kmeans(img, k=4, attempts=10, seed=42, kmeans_labes=[0]):
-
-    # 2. SLIC Superpixels
+def segment_using_superpixels_and_kmeans(img, k=4, attempts=10, seed=42, kmeans_labels=[0]):
+    if img.ndim == 2:
+        img = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
     blurred = cv2.GaussianBlur(img, (9, 9), 0)
     slic = cv2.ximgproc.createSuperpixelSLIC(blurred, 
                                              algorithm=cv2.ximgproc.SLIC, 
@@ -113,23 +101,18 @@ def segment_using_superpixels_and_kmeans(img, k=4, attempts=10, seed=42, kmeans_
     slic.iterate(10)
     
     labels = slic.getLabels()
-    
-    # 3. Calculate average color per superpixel
-    number_of_superpixels = slic.getNumberOfSuperpixels()
+    n_sp = slic.getNumberOfSuperpixels()
+
+    # Vectorized per-superpixel mean (avoids a slow Python loop over each superpixel).
+    flat_labels = labels.ravel()
+    counts = np.bincount(flat_labels, minlength=n_sp).astype(np.float64)
     avg_img = np.zeros_like(img)
-    for i in range(number_of_superpixels):
-        # Create a mask for the current superpixel and get its mean color
-        sp_mask = (labels == i).astype(np.uint8)
-        avg_img[labels == i] = cv2.mean(img, mask=sp_mask)[:3]
+    for c in range(3):
+        channel_sums = np.bincount(flat_labels, weights=img[:, :, c].ravel().astype(np.float64), minlength=n_sp)
+        avg_img[:, :, c] = (channel_sums / np.maximum(counts, 1)).astype(np.uint8)[labels]
 
-    # 4. Apply your K-means sorting to the AVERAGED image
-    # This clusters the superpixels into 'k' distinct brightness tiers
-    k_labels, k_centers = kmeans_brightness_labels(avg_img, k=k)
+    k_labels, k_centers = kmeans_brightness_labels(avg_img, k=k, attempts=attempts, seed=seed)
 
-    # 5. Extract the target regions
-    # Since 0 is the darkest (likely the bark), and k-1 is the brightest (inner wood/background)
-    
-    # Let's create a mask for the darkest region (Label 0)
-    bark_mask = mask_from_cluster_ids(k_labels, kmeans_labes)
+    bark_mask = mask_from_cluster_ids(k_labels, kmeans_labels)
             
-    return  bark_mask
+    return bark_mask

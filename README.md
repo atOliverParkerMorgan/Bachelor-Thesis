@@ -223,7 +223,7 @@ poetry run python src/preprocessing/conversion/ima2png.py --target src/ground_tr
 **Example 3: Quick crack-only analysis**
 ```bash
 # Skip all preprocessing, generate only crack masks
-./run --skip-extract --skip-convert --masks trhlina
+./run --skip-extract --skip-convert 
 ```
 
 **Example 4: Full pipeline with upload**
@@ -263,7 +263,7 @@ arXiv:2404.09556.
 ### Layout
 
 - `src/preprocessing/conversion/segmentmask2nnunetformat.py` - converts `datasets/Dataset001/dub*` slices into nnU-Net raw NIfTI volumes
-- `src/nn_UNet/prepare_dataset_to_nnunet_format.py` - converts one `src/png/dub*` tree to NIfTI inputs, restores predicted masks, and supports Datumaro/CVAT export
+- `src/preprocessing/conversion/nnunet_predict.py` - converts one `src/png/dub*` tree to NIfTI inputs, restores predicted masks, and supports Datumaro/CVAT export
 - `src/nn_UNet/pipeline.py` - wrappers for prepare, plan/preprocess, train, and predict
 - `run_nnunet` - convenience launcher (`poetry run python src/nn_UNet/pipeline.py ...`)
 
@@ -322,6 +322,12 @@ Predict a whole tree, write segmentation-style masks to `src/output/<tree>`, and
 ```bash
 ./run_nnunet predict-tree --tree dub5 --configuration 2d --fold 0 --plans-identifier nnUNetResEncUNetLPlans --make-datumaro
 ```
+
+Prediction now uses an automatic fast profile by default:
+
+- `--disable_tta` is applied automatically for speed
+- worker counts (`-npp`, `-nps`) are selected from detected GPU VRAM
+- no extra tuning flags are required for the common workflow
 
 You can also point it at a different ground-truth root if needed:
 
