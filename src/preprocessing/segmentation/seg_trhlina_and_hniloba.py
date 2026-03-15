@@ -1,112 +1,102 @@
 import cv2
 import numpy as np
 import improutils as iu
-from .seg_common import kmeans_brightness_labels, mask_from_cluster_ids, to_binary
-from skimage.segmentation import morphological_chan_vese
+
+from .seg_common import to_binary
+
+# --- Tuning constants ---
+TRHLINA_SCHARR_THRESHOLD = 50
+TRHLINA_MIN_AREA = 8
+
+# Radius (pixels) within which a dark component is considered near a suk → hniloba
+HNILOBA_SUK_PROXIMITY_PX = 30
 
 
-TRHLINA_MIN_COMPONENT_AREA = 20
-TRHLINA_MAX_CIRCULARITY = 0.58
-TRHLINA_MIN_ASPECT_RATIO = 2.0
-TRHLINA_MAX_EXTENT = 0.60
-TRHLINA_MAX_OUTER_RING_OVERLAP = 0.85
-TRHLINA_MAX_COMPONENT_AREA_RATIO = 0.20
+def segment_trhlina(log_img: np.ndarray, background_mask: np.ndarray) -> np.ndarray:
 
-TRHLINA_MIN_MAJOR_TO_MINOR_RATIO = 1.25
-TRHLINA_CENTERLINE_MAX_MINOR_FACTOR = 0.9
+    gray = iu.to_gray(log_img)
+    neutral_gray = gray.copy()
+    background_mask_dilated = cv2.dilate(background_mask, kernel=cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (32, 32)), iterations=1)
 
+    neutral_gray[background_mask_dilated == 255] = 125
 
-def segment_trhlina(img, k=5):
-    """Segment crack-like dark structures on a wood log image."""
-    # Emphasize narrow dark structures while suppressing broad wood texture.
-    gray = iu.to_gray(img)
-    kernel_bh = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (15, 15))
-    blackhat = cv2.morphologyEx(gray, cv2.MORPH_BLACKHAT, kernel_bh)
-    
-    # Promote crack pixels before clustering.
-    enhanced = cv2.addWeighted(cv2.bitwise_not(gray), 0.5, blackhat, 0.5, 0)
-    
-    # Denoise while preserving crack edges.
-    filtered = cv2.bilateralFilter(enhanced, d=9, sigmaColor=120, sigmaSpace=75)
-    # Run K-means using a 3-channel representation expected by shared helpers.
-    filtered_3c = cv2.cvtColor(filtered, cv2.COLOR_GRAY2BGR)
-    
-    k_labels, _k_centers = kmeans_brightness_labels(filtered_3c, k=k)
-    initial_mask = mask_from_cluster_ids(k_labels, [k - 1, k - 2])
-    
-    # Chan-Vese expects normalized image and binary initialization.
-    gray_float = gray.astype(np.float32) / 255.0
-    init_level_set = (initial_mask > 0).astype(np.float32)
-    
-    snake_mask_float = morphological_chan_vese(
-        gray_float,
-        num_iter=9,
-        init_level_set=init_level_set,
-        smoothing=0,
-    )
-    
-    return (snake_mask_float * 255).astype(np.uint8)
+    # Black-hat highlights dark features smaller than the kernel
+    kernel_bh = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (14, 14))
+    blackhat = cv2.morphologyEx(neutral_gray, cv2.MORPH_BLACKHAT, kernel_bh)
+
+    # Emphasise dark regions before gradient computation
+    enhanced = cv2.addWeighted(cv2.bitwise_not(neutral_gray), 0.5, blackhat, 0.5, 0)
+
+    # Smooth while preserving crack edges
+    filtered = cv2.bilateralFilter(enhanced, d=7, sigmaColor=110, sigmaSpace=20)
+
+    # Scharr gradient magnitude
+    scharr_x = cv2.Scharr(filtered, cv2.CV_64F, 1, 0)
+    scharr_y = cv2.Scharr(filtered, cv2.CV_64F, 0, 1)
+    scharr_mag = cv2.magnitude(scharr_x, scharr_y)
+    scharr_mag = cv2.normalize(scharr_mag, None, 0, 255, cv2.NORM_MINMAX, dtype=cv2.CV_8U)
+
+    _, thresh = cv2.threshold(scharr_mag, TRHLINA_SCHARR_THRESHOLD, 255, cv2.THRESH_BINARY)
+    filled, _, _ = iu.find_contours(thresh, min_area=TRHLINA_MIN_AREA, fill=True)
+
+    return filled
 
 
-def refine_trhlina_mask(raw_trhlina_mask, log_mask, outer_ring, background_mask):
-    # Restrict to log interior, exclude background.
-    masked = cv2.bitwise_and(raw_trhlina_mask, log_mask)
-    masked = cv2.bitwise_and(masked, cv2.bitwise_not(background_mask))
-    masked = cv2.bitwise_and(masked, cv2.bitwise_not(outer_ring))
-    trhlina_mask = np.zeros_like(masked)
-    hniloba_mask = np.zeros_like(masked)
+def split_by_suk_proximity(
+    candidate: np.ndarray,
+    suk_mask: np.ndarray,
+    proximity_px: int = HNILOBA_SUK_PROXIMITY_PX,
+) -> tuple[np.ndarray, np.ndarray]:
 
-    log_area = int(np.count_nonzero(log_mask))
+    binary_candidate = to_binary(candidate)
+    binary_suk = to_binary(suk_mask)
 
-    contours, _ = cv2.findContours(masked, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    if cv2.countNonZero(binary_suk) == 0:
+        # No knots detected — everything is classified as a crack
+        return binary_candidate, np.zeros_like(binary_candidate)
 
-    for cnt in contours:
-        area = cv2.contourArea(cnt)
-        if area < TRHLINA_MIN_COMPONENT_AREA:
-            continue
+    # Dilate suk region to define the proximity zone
+    kernel_size = 2 * proximity_px + 1
+    proximity_kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (kernel_size, kernel_size))
+    suk_zone = cv2.dilate(binary_suk, proximity_kernel, iterations=1)
 
-        # Draw filled component for overlap queries.
-        comp_mask = np.zeros_like(masked)
-        cv2.drawContours(comp_mask, [cnt], -1, 255, cv2.FILLED)
+    n_labels, label_img, _, _ = cv2.connectedComponentsWithStats(binary_candidate, connectivity=8)
 
-        # Fraction of this component that falls inside the outer ring.
-        overlap_px = int(np.count_nonzero(cv2.bitwise_and(comp_mask, outer_ring)))
-        outer_overlap = overlap_px / area if area > 0 else 0.0
-
-        # Perimeter-based circularity (1 = perfect circle, lower = elongated).
-        perimeter = cv2.arcLength(cnt, True)
-        circularity = (4 * np.pi * area / perimeter ** 2) if perimeter > 0 else 0.0
-
-        # Bounding-rect aspect ratio and extent.
-        _x, _y, w, h = cv2.boundingRect(cnt)
-        rect_min = min(w, h)
-        aspect_ratio = max(w, h) / rect_min if rect_min > 0 else 1.0
-        extent = area / (w * h) if w * h > 0 else 0.0
-
-        # Ellipse major-to-minor ratio (more stable than bounding rect for skewed shapes).
-        if len(cnt) >= 5:
-            _center, (axis_a, axis_b), _angle = cv2.fitEllipse(cnt)
-            ax_min = min(axis_a, axis_b)
-            major_to_minor = max(axis_a, axis_b) / ax_min if ax_min > 0 else 1.0
+    trhlina = np.zeros_like(binary_candidate)
+    hniloba = np.zeros_like(binary_candidate)
+    for label_id in range(1, n_labels):
+        component = (label_img == label_id).astype(np.uint8) * 255
+        near_suk = cv2.countNonZero(cv2.bitwise_and(component, suk_zone)) > 0
+        if near_suk:
+            hniloba = cv2.bitwise_or(hniloba, component)
         else:
-            major_to_minor = aspect_ratio
+            trhlina = cv2.bitwise_or(trhlina, component)
 
-        # Large dark blobs that fill much of the log are rot, not cracks.
-        area_ratio = area / log_area if log_area > 0 else 0.0
+    return trhlina, hniloba
 
-        # Trhlina (crack): elongated, low circularity, not dominated by outer bark.
-        is_trhlina = (
-            circularity <= TRHLINA_MAX_CIRCULARITY
-            and aspect_ratio >= TRHLINA_MIN_ASPECT_RATIO
-            and extent <= TRHLINA_MAX_EXTENT
-            and major_to_minor >= TRHLINA_MIN_MAJOR_TO_MINOR_RATIO
-            and outer_overlap <= TRHLINA_MAX_OUTER_RING_OVERLAP
-            and area_ratio <= TRHLINA_MAX_COMPONENT_AREA_RATIO
+
+def refine_trhlina_mask(
+    raw_mask: np.ndarray,
+    log_mask: np.ndarray,
+    outer_ring: np.ndarray | None,
+    background_mask: np.ndarray,
+    suk_mask: np.ndarray | None = None,
+    proximity_px: int = HNILOBA_SUK_PROXIMITY_PX,
+) -> tuple[np.ndarray, np.ndarray]:
+
+    candidate = cv2.bitwise_and(to_binary(raw_mask), to_binary(log_mask))
+
+    # Remove crack detections that fall on the outer bark ring
+    if outer_ring is not None:
+        outer_guard = cv2.dilate(
+            to_binary(outer_ring),
+            cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5)),
+            iterations=1,
         )
+        candidate = cv2.bitwise_and(candidate, cv2.bitwise_not(outer_guard))
 
-        if is_trhlina:
-            cv2.drawContours(trhlina_mask, [cnt], -1, 255, cv2.FILLED)
-        else:
-            cv2.drawContours(hniloba_mask, [cnt], -1, 255, cv2.FILLED)
+    if suk_mask is not None:
+        return split_by_suk_proximity(candidate, suk_mask, proximity_px)
 
-    return trhlina_mask, hniloba_mask
+    return candidate, np.zeros_like(candidate)
+
