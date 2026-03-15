@@ -6,9 +6,19 @@ from .seg_common import segment_using_superpixels_and_kmeans, to_binary
 KURA_MIN_COMPONENT_AREA = 80
 KURA_MIN_BOUNDARY_OVERLAP_RATIO = 0.01
 KURA_MIN_BOUNDARY_OVERLAP_PIXELS = 40
+KURA_SUPERPIXEL_REGION_SIZE = 8
+KURA_SUPERPIXEL_RULER = 5.0
 
-def segment_crust(img, k=10, attempts=5, seed=42):
-   return segment_using_superpixels_and_kmeans(img, k, attempts, seed, [1,2,3])
+def segment_crust(img, k=8, attempts=1, seed=42):
+   return segment_using_superpixels_and_kmeans(
+      img,
+      k,
+      attempts,
+      seed,
+      [1, 2, 3],
+      region_size=KURA_SUPERPIXEL_REGION_SIZE,
+      ruler=KURA_SUPERPIXEL_RULER,
+   )
 
 
 def refine_kura_outer_crust(raw_kura_mask, log_mask, crust_band, outer_ring, trhlina_and_hniloba_mask=None):
