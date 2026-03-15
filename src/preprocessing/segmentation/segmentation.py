@@ -7,12 +7,12 @@ import numpy as np
 from tqdm import tqdm
 import improutils as iu
 
-# Assuming these are imported from your local modules
 from .seg_kura import segment_crust, refine_kura_outer_crust
 from .seg_suk import segment_suk
 from .seg_pozadi import segment_background_and_inner_log
 from .seg_trhlina_and_hniloba import segment_trhlina, refine_trhlina_mask
 from .seg_common import apply_clahe
+
 
 def compute_dataset_normalization(files: list[Path], max_sample_slices: int = 160) -> tuple[float, float]:
     """Estimate global Mean and Standard Deviation from evenly sampled slices across the dataset."""
@@ -118,80 +118,65 @@ def _outer_geometry_from_log(log_mask):
     return outer_ring, crust_band
 
 
-def build_masks(img, requested_masks=None):
-    """Generate requested masks with the segmentation pipeline."""
+def build_masks(img: np.ndarray, requested_masks: set[str] | None = None) -> dict[str, np.ndarray]:
+    """Generate requested segmentation masks for a single log cross-section image."""
     if requested_masks is None:
         requested_masks = set(MASK_NAMES)
-    
+
+    # --- Step 1: Log / background geometry (always needed) ---
     background_mask, inner_log_mask = segment_background_and_inner_log(img)
     log_mask = cv2.bitwise_not(background_mask)
-    
     log_img = iu.apply_mask(img, log_mask)
+    outer_ring, crust_band = _outer_geometry_from_log(log_mask)
 
-    results = {}
-    trhlina_and_hniloba_mask = None
+    results: dict[str, np.ndarray] = {}
 
-    need_kura_or_dark = "kura" in requested_masks or "trhlina" in requested_masks or "hniloba" in requested_masks
-    if need_kura_or_dark:
+    # --- Step 2: Suk (knots) — computed early; needed for hniloba/trhlina split ---
+    need_suk = any(m in requested_masks for m in ("suk", "hniloba", "trhlina"))
+    suk_mask = segment_suk(log_img) if need_suk else None
+    if "suk" in requested_masks and suk_mask is not None:
+        results["suk"] = suk_mask
+
+    # --- Step 3: Dark features (cracks + rot), split by suk proximity ---
+    trhlina_mask: np.ndarray | None = None
+    hniloba_mask: np.ndarray | None = None
+    dark_combined: np.ndarray | None = None
+    if "trhlina" in requested_masks or "hniloba" in requested_masks:
+        raw_dark_mask = segment_trhlina(log_img, background_mask)
+        raw_dark_mask = cv2.bitwise_and(raw_dark_mask, log_mask)
+        trhlina_mask, hniloba_mask = refine_trhlina_mask(
+            raw_dark_mask, log_mask, outer_ring, background_mask, suk_mask=suk_mask
+        )
+        
+        dark_combined = cv2.bitwise_or(trhlina_mask, hniloba_mask)
+        if "trhlina" in requested_masks:
+            results["trhlina"] = trhlina_mask
+        if "hniloba" in requested_masks:
+            results["hniloba"] = hniloba_mask
+
+    # --- Step 4: Bark (kura) ---
+    kura_mask: np.ndarray | None = None
+    if "kura" in requested_masks or "pozadi" in requested_masks:
         raw_kura_mask = segment_crust(log_img)
-    else:
-        raw_kura_mask = None
-
-    need_dark_components = ("trhlina" in requested_masks or "hniloba" in requested_masks)
-    if need_dark_components:
-        raw_trhlina_mask = segment_trhlina(log_img)
-        raw_trhlina_mask = cv2.bitwise_and(raw_trhlina_mask, log_mask)
-        outer_ring, crust_band = _outer_geometry_from_log(log_mask)
-        trhlina_mask, hniloba_mask = refine_trhlina_mask(raw_trhlina_mask, log_mask, outer_ring, background_mask)
-        trhlina_and_hniloba_mask = cv2.bitwise_or(trhlina_mask, hniloba_mask)
-    else:
-        trhlina_mask = None
-        hniloba_mask = None
-        if raw_kura_mask is not None:
-            outer_ring, crust_band = _outer_geometry_from_log(log_mask)
-        else:
-            outer_ring, crust_band = None, None
-
-    if raw_kura_mask is not None:
         kura_mask = refine_kura_outer_crust(
             raw_kura_mask,
             log_mask,
             crust_band,
             outer_ring,
-            trhlina_and_hniloba_mask=trhlina_and_hniloba_mask,
+            trhlina_and_hniloba_mask=dark_combined,
         )
-    
-    else:
-        kura_mask = None
+        if "kura" in requested_masks:
+            results["kura"] = kura_mask
 
-    if "kura" in requested_masks and kura_mask is not None:
-        results["kura"] = kura_mask
-
-    need_suk = "suk" in requested_masks or "hniloba" in requested_masks
-    if need_suk:
-        suk_mask = segment_suk(log_img)
-        if "suk" in requested_masks:
-            results["suk"] = suk_mask
-    else:
-        suk_mask = None
-
-    if "trhlina" in requested_masks or "hniloba" in requested_masks:
-        if "trhlina" in requested_masks:
-            results["trhlina"] = trhlina_mask
-        if "hniloba" in requested_masks:
-            results["hniloba"] = hniloba_mask
-    elif "hniloba" in requested_masks:
-        results["hniloba"] = np.zeros_like(log_mask, dtype=np.uint8)
-
+    # --- Step 5: Background (pozadi) ---
     if "pozadi" in requested_masks:
-        if kura_mask is not None:
-            combined_foreground = kura_mask
-            if trhlina_mask is not None:
-                combined_foreground = cv2.bitwise_or(kura_mask, trhlina_mask)
-            if hniloba_mask is not None:
-                combined_foreground = cv2.bitwise_or(kura_mask, hniloba_mask)
-            background_mask = cv2.bitwise_and(iu.negative(inner_log_mask), cv2.bitwise_not(combined_foreground))
-        results["pozadi"] = background_mask
+        foreground = kura_mask if kura_mask is not None else np.zeros_like(log_mask)
+        for extra_mask in (trhlina_mask, hniloba_mask):
+            if extra_mask is not None:
+                foreground = cv2.bitwise_or(foreground, extra_mask)
+        results["pozadi"] = cv2.bitwise_and(
+            iu.negative(inner_log_mask), cv2.bitwise_not(foreground)
+        )
 
     return results
 
