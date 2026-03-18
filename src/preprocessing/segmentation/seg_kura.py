@@ -1,7 +1,7 @@
 import cv2
 import numpy as np
 from .seg_common import segment_using_superpixels_and_kmeans, to_binary
-
+import improutils as iu
 
 KURA_MIN_COMPONENT_AREA = 80
 KURA_MIN_BOUNDARY_OVERLAP_RATIO = 0.01
@@ -9,7 +9,7 @@ KURA_MIN_BOUNDARY_OVERLAP_PIXELS = 40
 KURA_SUPERPIXEL_REGION_SIZE = 8
 KURA_SUPERPIXEL_RULER = 5.0
 
-def segment_crust(img, k=8, attempts=1, seed=42):
+def segment_crust(img, k=9, attempts=1, seed=42):
    return segment_using_superpixels_and_kmeans(
       img,
       k,

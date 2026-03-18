@@ -1,5 +1,4 @@
 import argparse
-import json
 import sys
 from pathlib import Path
 import cv2
@@ -12,88 +11,6 @@ from .seg_suk import segment_suk
 from .seg_pozadi import segment_background_and_inner_log
 from .seg_trhlina_and_hniloba import segment_trhlina, refine_trhlina_mask
 from .seg_common import apply_clahe
-
-
-def compute_dataset_normalization(files: list[Path], max_sample_slices: int = 160) -> tuple[float, float]:
-    """Estimate global Mean and Standard Deviation from evenly sampled slices across the dataset."""
-    if not files:
-        return 128.0, 64.0 # Fallback safe values
-
-    sample_count = min(max_sample_slices, len(files))
-    sample_indices = np.linspace(0, len(files) - 1, num=sample_count, dtype=int)
-
-    samples = []
-    for idx in sample_indices:
-        f_path = files[int(idx)]
-        try:
-            img = iu.load_image(str(f_path))
-            gray = iu.to_gray(img) 
-            gray = apply_clahe(gray)
-            samples.append(gray[::4, ::4].ravel()) 
-        except Exception:
-            pass
-            
-    if not samples:
-        return 128.0, 64.0
-        
-    all_pixels = np.concatenate(samples)
-    
-    # Calculate global mean and standard deviation
-    global_mean = float(np.mean(all_pixels))
-    global_std = float(np.std(all_pixels))
-    
-    return global_mean, global_std
-
-
-def build_normalization_lut(global_mean: float, global_std: float, target_mean: float = 128.0, target_std: float = 64.0) -> np.ndarray:
-    """Build a fast Lookup Table to shift dataset variance to our target standard."""
-    if global_std < 1e-3:
-        global_std = 1.0 # Avoid division by zero
-        
-    # Create an array of all possible pixel values [0-255]
-    indices = np.arange(256, dtype=np.float32)
-    
-    # Apply standard distribution matching formula: Z-score -> scale -> shift
-    normalized = (indices - global_mean) * (target_std / global_std) + target_mean
-    
-    # Clip to valid 8-bit range and convert
-    return np.clip(normalized, 0, 255).astype(np.uint8)
-
-
-def apply_dataset_normalization(img: np.ndarray, lut: np.ndarray) -> np.ndarray:
-    """Apply precomputed intensity normalization LUT to grayscale image."""
-    return cv2.LUT(img, lut)
-
-
-def normalization_cache_key(files: list[Path]) -> dict[str, object]:
-    return {
-        "count": len(files),
-        "first": files[0].name if files else "",
-        "last": files[-1].name if files else "",
-        "max_mtime": max((path.stat().st_mtime for path in files), default=0.0),
-    }
-
-
-def load_cached_normalization(cache_path: Path, key: dict[str, object]) -> tuple[float, float] | None:
-    if not cache_path.exists():
-        return None
-    try:
-        with cache_path.open("r", encoding="utf-8") as file_handle:
-            payload = json.load(file_handle)
-        if payload.get("key") != key:
-            return None
-        global_mean = float(payload.get("mean", 128.0))
-        global_std = float(payload.get("std", 64.0))
-        return global_mean, global_std
-    except Exception:
-        return None
-
-
-def save_cached_normalization(cache_path: Path, key: dict[str, object], global_mean: float, global_std: float) -> None:
-    cache_path.parent.mkdir(parents=True, exist_ok=True)
-    payload = {"key": key, "mean": global_mean, "std": global_std}
-    with cache_path.open("w", encoding="utf-8") as file_handle:
-        json.dump(payload, file_handle)
 
 MASK_NAMES = ["pozadi", "kura", "suk", "hniloba", "trhlina"]
 
@@ -118,29 +35,32 @@ def _outer_geometry_from_log(log_mask):
     return outer_ring, crust_band
 
 
-def build_masks(img: np.ndarray, requested_masks: set[str] | None = None) -> dict[str, np.ndarray]:
+def build_masks(img, requested_masks=None):
     """Generate requested segmentation masks for a single log cross-section image."""
     if requested_masks is None:
         requested_masks = set(MASK_NAMES)
 
-    # --- Step 1: Log / background geometry (always needed) ---
     background_mask, inner_log_mask = segment_background_and_inner_log(img)
     log_mask = cv2.bitwise_not(background_mask)
     log_img = iu.apply_mask(img, log_mask)
+
+    log_img_clahe = apply_clahe(log_img)
     outer_ring, crust_band = _outer_geometry_from_log(log_mask)
 
-    results: dict[str, np.ndarray] = {}
+    results = {}
 
-    # --- Step 2: Suk (knots) — computed early; needed for hniloba/trhlina split ---
+    # Suk 
     need_suk = any(m in requested_masks for m in ("suk", "hniloba", "trhlina"))
-    suk_mask = segment_suk(log_img) if need_suk else None
+    suk_mask = segment_suk(log_img_clahe) if need_suk else None
     if "suk" in requested_masks and suk_mask is not None:
         results["suk"] = suk_mask
 
-    # --- Step 3: Dark features (cracks + rot), split by suk proximity ---
-    trhlina_mask: np.ndarray | None = None
-    hniloba_mask: np.ndarray | None = None
-    dark_combined: np.ndarray | None = None
+    # Praskliny a hniloba
+    trhlina_mask = None
+    hniloba_mask = None
+    dark_combined = None
+
+
     if "trhlina" in requested_masks or "hniloba" in requested_masks:
         raw_dark_mask = segment_trhlina(log_img, background_mask)
         raw_dark_mask = cv2.bitwise_and(raw_dark_mask, log_mask)
@@ -154,10 +74,10 @@ def build_masks(img: np.ndarray, requested_masks: set[str] | None = None) -> dic
         if "hniloba" in requested_masks:
             results["hniloba"] = hniloba_mask
 
-    # --- Step 4: Bark (kura) ---
-    kura_mask: np.ndarray | None = None
+    # kura
+    kura_mask = None
     if "kura" in requested_masks or "pozadi" in requested_masks:
-        raw_kura_mask = segment_crust(log_img)
+        raw_kura_mask = segment_crust(log_img_clahe)
         kura_mask = refine_kura_outer_crust(
             raw_kura_mask,
             log_mask,
@@ -168,7 +88,7 @@ def build_masks(img: np.ndarray, requested_masks: set[str] | None = None) -> dic
         if "kura" in requested_masks:
             results["kura"] = kura_mask
 
-    # --- Step 5: Background (pozadi) ---
+    # pozadi
     if "pozadi" in requested_masks:
         foreground = kura_mask if kura_mask is not None else np.zeros_like(log_mask)
         for extra_mask in (trhlina_mask, hniloba_mask):
@@ -198,12 +118,7 @@ def build_parser():
         default=["all"],
         help="Masks to generate (default: all)",
     )
-    parser.add_argument(
-        "--normalization-sample-slices",
-        type=int,
-        default=160,
-        help="How many slices to sample when estimating global normalization (default: 160)",
-    )
+    
     return parser
 
 
@@ -226,33 +141,15 @@ def main():
         ]
     )
 
+    if not files:
+        raise FileNotFoundError(f"No image files found in: {input_dir}")
+
     if "all" in args.masks:
         requested_masks = set(MASK_NAMES)
     else:
         requested_masks = set(args.masks)
 
     print(f"Processing tree {args.tree} masks: {', '.join(sorted(requested_masks))}")
-
-    cache_path = output_dir / ".normalization_cache.json"
-    cache_key = normalization_cache_key(files)
-    cached = load_cached_normalization(cache_path, cache_key)
-
-    if cached is not None:
-        global_mean, global_std = cached
-        print(f"Using cached dataset normalization for {len(files)} slices")
-    else:
-        sample_slices = max(1, int(args.normalization_sample_slices))
-        print(
-            f"Computing dataset normalization from {min(sample_slices, len(files))}/"
-            f"{len(files)} sampled slices..."
-        )
-        global_mean, global_std = compute_dataset_normalization(files, max_sample_slices=sample_slices)
-        save_cached_normalization(cache_path, cache_key, global_mean, global_std)
-
-    print(f"  Dataset Original Global Mean: {global_mean:.1f}, Global StdDev: {global_std:.1f}")
-    
-    # We target a middle-gray mean (128) and a moderate spread (64)
-    normalization_lut = build_normalization_lut(global_mean, global_std, target_mean=128.0, target_std=64.0)
 
     is_tty = sys.stdout.isatty()
     with tqdm(
@@ -268,16 +165,8 @@ def main():
             progress.set_postfix_str(f_path.name)
             try:
                 img = iu.load_image(str(f_path))
-                # Ensure grayscale before processing
-                img = iu.to_gray(img)
-
-                # Local contrast normalization (CLAHE)
-                img = apply_clahe(img, clip_limit=2.0)
-
-                # Global intensity normalization to match dataset statistics
-                img = apply_dataset_normalization(img, normalization_lut)
-
                 mask_dict = build_masks(img, requested_masks)
+
             except Exception as exc:
                 tqdm.write(f"[WARN] Failed to process {f_path}: {exc}")
                 mask_dict = None

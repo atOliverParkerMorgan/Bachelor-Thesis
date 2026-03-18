@@ -12,7 +12,7 @@ TRHLINA_MIN_AREA = 8
 HNILOBA_SUK_PROXIMITY_PX = 30
 
 
-def segment_trhlina(log_img: np.ndarray, background_mask: np.ndarray) -> np.ndarray:
+def segment_trhlina(log_img, background_mask):
 
     gray = iu.to_gray(log_img)
     neutral_gray = gray.copy()
@@ -43,10 +43,10 @@ def segment_trhlina(log_img: np.ndarray, background_mask: np.ndarray) -> np.ndar
 
 
 def split_by_suk_proximity(
-    candidate: np.ndarray,
-    suk_mask: np.ndarray,
-    proximity_px: int = HNILOBA_SUK_PROXIMITY_PX,
-) -> tuple[np.ndarray, np.ndarray]:
+    candidate,
+    suk_mask,
+    proximity_px=HNILOBA_SUK_PROXIMITY_PX,
+):
 
     binary_candidate = to_binary(candidate)
     binary_suk = to_binary(suk_mask)
@@ -76,13 +76,13 @@ def split_by_suk_proximity(
 
 
 def refine_trhlina_mask(
-    raw_mask: np.ndarray,
-    log_mask: np.ndarray,
-    outer_ring: np.ndarray | None,
-    background_mask: np.ndarray,
-    suk_mask: np.ndarray | None = None,
-    proximity_px: int = HNILOBA_SUK_PROXIMITY_PX,
-) -> tuple[np.ndarray, np.ndarray]:
+    raw_mask,
+    log_mask,
+    outer_ring,
+    background_mask,
+    suk_mask=None,
+    proximity_px=HNILOBA_SUK_PROXIMITY_PX,
+):
 
     candidate = cv2.bitwise_and(to_binary(raw_mask), to_binary(log_mask))
 

@@ -6,7 +6,7 @@ SUK_SUPERPIXEL_REGION_SIZE = 12
 SUK_SUPERPIXEL_RULER = 1.0
 
 
-def segment_suk(img, k=22, attempts=1, seed=42):
+def segment_suk(img, k=13, attempts=1, seed=42):
    if has_outliers(img):
       mask = segment_using_superpixels_and_kmeans(
          img,

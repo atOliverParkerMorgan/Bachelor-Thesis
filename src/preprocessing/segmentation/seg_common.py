@@ -7,10 +7,10 @@ def to_binary(mask):
     return np.where(mask > 0, 255, 0).astype(np.uint8)
 
 
-def apply_clahe(gray_img, clip_limit=2.0, tile_grid=(8, 8)):
+def apply_clahe(img, clip_limit=2.0, tile_grid=(8, 8)):
     """Apply Contrast Limited Adaptive Histogram Equalization."""
     clahe = cv2.createCLAHE(clipLimit=clip_limit, tileGridSize=tile_grid)
-    return clahe.apply(gray_img)
+    return clahe.apply(iu.to_gray(img))
 
 def kmeans_brightness_labels(image, k=4, attempts=3, seed=42):
     """Run deterministic K-means and return labels sorted by cluster brightness.
@@ -84,6 +84,11 @@ def fourier_bandpass_filter(image, min_freq, max_freq):
 
     f_transform = np.fft.fft2(gray)
     f_shift = np.fft.fftshift(f_transform)
+    magnitude = np.abs(f_transform)
+    shifted = np.fft.fftshift(magnitude)
+    log_magnitude = np.log(1 + shifted)
+
+    # iu.plot_images(log_magnitude, normalize=True)
     f_shift_filtered = f_shift * mask
     f_ishift = np.fft.ifftshift(f_shift_filtered)
 
@@ -133,7 +138,7 @@ def segment_using_superpixels_and_kmeans(
 
     return bark_mask
 
-def has_outliers(img, intensity_thresh=(222, 250), min_area=64, plot=False):
+def has_outliers(img, intensity_thresh=(210, 250), min_area=64, plot=False):
     gray_img = iu.to_gray(img)
     seg_mask = iu.segmentation_two_thresholds(gray_img, intensity_thresh[0], intensity_thresh[1])
     contours_drawn, count, _ = iu.find_contours(seg_mask, min_area=min_area)
