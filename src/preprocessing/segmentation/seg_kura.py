@@ -9,13 +9,13 @@ KURA_MIN_BOUNDARY_OVERLAP_PIXELS = 40
 KURA_SUPERPIXEL_REGION_SIZE = 8
 KURA_SUPERPIXEL_RULER = 5.0
 
-def segment_crust(img, k=9, attempts=1, seed=42):
+def segment_crust(img, k=14, attempts=1, seed=42):
    return segment_using_superpixels_and_kmeans(
       img,
       k,
       attempts,
       seed,
-      [1, 2, 3],
+      [1, 2, 3, 4, 5],
       region_size=KURA_SUPERPIXEL_REGION_SIZE,
       ruler=KURA_SUPERPIXEL_RULER,
    )

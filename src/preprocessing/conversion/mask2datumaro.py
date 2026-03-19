@@ -18,13 +18,14 @@ DEFAULT_LABEL_NAMES = ["Pozadi", "Suk", "Hniloba", "Kura", "Trhlina"]
 
 
 class DatasetItemsIterable:
-    def __init__(self, mask_files, ref_dir, images_dir, masks_dir, folder_to_id, subset):
+    def __init__(self, mask_files, ref_dir, images_dir, masks_dir, folder_to_id, subset, item_id_mode):
         self.mask_files = mask_files
         self.ref_dir = ref_dir
         self.images_dir = images_dir
         self.masks_dir = masks_dir
         self.folder_to_id = folder_to_id
         self.subset = subset
+        self.item_id_mode = item_id_mode
 
     def __iter__(self):
         return iter_dataset_items(
@@ -34,13 +35,26 @@ class DatasetItemsIterable:
             masks_dir=self.masks_dir,
             folder_to_id=self.folder_to_id,
             subset=self.subset,
+            item_id_mode=self.item_id_mode,
         )
 
 
-def iter_dataset_items(mask_files, ref_dir, images_dir, masks_dir, folder_to_id, subset):
+def _build_item_id(rel_path: Path, mode: str) -> str:
+    if mode == "stem":
+        return rel_path.stem
+    if mode == "name":
+        return rel_path.name
+    if mode == "relative_stem":
+        return rel_path.with_suffix("").as_posix()
+    if mode == "relative_name":
+        return rel_path.as_posix()
+    raise ValueError(f"Unsupported item id mode: {mode}")
+
+
+def iter_dataset_items(mask_files, ref_dir, images_dir, masks_dir, folder_to_id, subset, item_id_mode):
     for bg_mask_path in tqdm(mask_files, desc="Building Dataset"):
         rel_path = bg_mask_path.relative_to(ref_dir)
-        item_id = rel_path.stem
+        item_id = _build_item_id(rel_path, item_id_mode)
 
         image_path = None
         for ext in [".png", ".jpg", ".jpeg", ".tif", ".bmp"]:
@@ -94,6 +108,8 @@ def export_datumaro_dataset(
     task_name: str,
     label_names: list[str] | None = None,
     folder_to_id: dict[str, int] | None = None,
+    save_media: bool = True,
+    item_id_mode: str = "stem",
 ) -> Path:
     label_names = label_names or DEFAULT_LABEL_NAMES
     folder_to_id = folder_to_id or DEFAULT_FOLDER_TO_ID
@@ -131,6 +147,7 @@ def export_datumaro_dataset(
             masks_dir=masks_dir,
             folder_to_id=folder_to_id,
             subset=task_name,
+            item_id_mode=item_id_mode,
         ),
         categories=categories,
     )
@@ -141,7 +158,7 @@ def export_datumaro_dataset(
         shutil.rmtree(temp_dir)
 
     try:
-        dataset.export(save_dir=str(temp_dir), format="datumaro", save_media=True)
+        dataset.export(save_dir=str(temp_dir), format="datumaro", save_media=save_media)
         output_base = str(output).replace(".zip", "")
         shutil.make_archive(output_base, "zip", root_dir=temp_dir)
         print(f"Created Datumaro dataset at: {output}")
@@ -182,6 +199,17 @@ def main():
         default=DEFAULT_LABEL_NAMES,
         help="Labels for Background, Knot, Decay, Bark, Crack",
     )
+    parser.add_argument(
+        "--no-media",
+        action="store_true",
+        help="Export annotations only (no image media inside Datumaro zip)",
+    )
+    parser.add_argument(
+        "--item-id-mode",
+        choices=["stem", "name", "relative_stem", "relative_name"],
+        default="stem",
+        help="How to build Datumaro item ids for CVAT frame matching",
+    )
 
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO)
@@ -191,6 +219,8 @@ def main():
         output=args.output,
         task_name=args.task_name,
         label_names=args.label_names,
+        save_media=not args.no_media,
+        item_id_mode=args.item_id_mode,
     )
 
 

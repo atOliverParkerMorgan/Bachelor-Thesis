@@ -141,14 +141,23 @@ Use the `run` script to execute the complete pipeline automatically:
 
 # Useful
 ./run --skip-extract --skip-convert --upload --masks pozadi  
+
+# Import only annotations to an existing CVAT job
+./run --skip-extract --skip-convert --upload --upload-job-id 12345 --masks pozadi
+
+# Import only one tree annotations to one existing CVAT job
+./run --tree dub5 --skip-extract --skip-convert --upload --upload-job-id 12345 --masks pozadi
 ```
 
 **Pipeline Options:**
 
 - `--masks, -m MASKS` — Masks to generate (comma-separated: pozadi,kura,suk,hniloba,trhlina or 'all')
+- `--tree, -t TREE` — Process only one tree (for example: dub5)
 - `--skip-extract` — Skip extraction if PNG files already exist
 - `--skip-convert` — Skip IMA→PNG conversion for existing files
 - `--upload` — Upload results to CVAT (requires credentials)
+- `--upload-job-id JOB_ID` — Import annotations only into an existing CVAT job
+- `--datumaro-no-media` — Export Datumaro without images (annotations only)
 - `-h, --help` — Show help message
 
 The pipeline automatically:
@@ -167,6 +176,7 @@ For CVAT upload support, create a `.env` file in the project root:
 ```bash
 CVAT_TOKEN=your_api_token_here
 CVAT_PROJECT_ID=your_project_id
+CVAT_JOB_ID=your_existing_job_id
 CVAT_ORGANIZATION=BP
 
 # Optional upload tuning (defaults shown)
@@ -177,6 +187,8 @@ CVAT_READ_TIMEOUT=1800
 ```
 
 Then use `./run --upload` to automatically upload results.
+
+When using `--upload-job-id` (or `CVAT_JOB_ID`), the pipeline exports annotation-only Datumaro by default (no media files inside the zip), which is intended for importing labels into an existing CVAT job.
 
 **Segmentation Configs:**
 

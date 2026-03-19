@@ -633,14 +633,14 @@ test-no-images = ["pytest", "pytest-cov", "pytest-rerunfailures", "pytest-xdist"
 
 [[package]]
 name = "cvat-sdk"
-version = "2.57.0"
+version = "2.60.0"
 description = "Software Development Kit for CVAT"
 optional = false
 python-versions = ">=3.10"
 groups = ["main"]
 files = [
-    {file = "cvat_sdk-2.57.0-py3-none-any.whl", hash = "sha256:0356ef41f9bd793a516331f442f54043024784ea039886aa049c0cef25fcb2a1"},
-    {file = "cvat_sdk-2.57.0.tar.gz", hash = "sha256:9cb0f04bdcc4c03e14331ec0d6463abfbecbf16d872295ca2cf97c6ab166fd2c"},
+    {file = "cvat_sdk-2.60.0-py3-none-any.whl", hash = "sha256:f1c3fd51cd1ed3ce2c26cd52abf5ae68326d82e1929100f7252605d729a0355b"},
+    {file = "cvat_sdk-2.60.0.tar.gz", hash = "sha256:a3ccac42c9ea6a4cab6f0f238f502e64658d59b442fd099544baa662b931bd81"},
 ]
 
 [package.dependencies]
@@ -5138,4 +5138,4 @@ PyYAML = "*"
 [metadata]
 lock-version = "2.1"
 python-versions = "^3.10"
-content-hash = "d9127fa581f56886f2f99d91bebea5695b64888c20e8df75404e916015e0b14b"
+content-hash = "192553015377c64aabcf207b4084707034b5aa0ed3a2e68e87649a2635a43817"

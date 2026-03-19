@@ -41,6 +41,11 @@ def build_masks(img, requested_masks=None):
         requested_masks = set(MASK_NAMES)
 
     background_mask, inner_log_mask = segment_background_and_inner_log(img)
+    
+    # No Log to segment
+    if background_mask is None or inner_log_mask is None:
+        return None
+
     log_mask = cv2.bitwise_not(background_mask)
     log_img = iu.apply_mask(img, log_mask)
 
@@ -166,7 +171,8 @@ def main():
             try:
                 img = iu.load_image(str(f_path))
                 mask_dict = build_masks(img, requested_masks)
-
+                if mask_dict is None:
+                    tqdm.write(f"[WARN] No log detected in {f_path}, skipping masks.")
             except Exception as exc:
                 tqdm.write(f"[WARN] Failed to process {f_path}: {exc}")
                 mask_dict = None

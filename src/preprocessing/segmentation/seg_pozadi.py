@@ -11,7 +11,9 @@ def segment_background_and_inner_log(img):
     ``crust_mask`` is accepted for API compatibility but intentionally not applied,
     so the log/background complement relation is preserved.
     """
-    inner_log_mask = extract_log_mask(img, min_area=0, close_kernel_size=5)
+    inner_log_mask = extract_log_mask(img, min_area=128_000, close_kernel_size=5)
+    if inner_log_mask is None:
+        return None, None
 
     solid_log = get_solid_log_mask(inner_log_mask)
     background_mask = cv2.bitwise_not(to_binary(solid_log))

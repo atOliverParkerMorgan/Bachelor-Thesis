@@ -10,6 +10,9 @@ SKIP_CONVERT=false
 SKIP_SEG=false
 SKIP_DATUMARO=false
 UPLOAD=false
+UPLOAD_JOB_ID=""
+TREE=""
+DATUMARO_NO_MEDIA=false
 
 # Parse arguments
 while [[ $# -gt 0 ]]; do
@@ -38,16 +41,31 @@ while [[ $# -gt 0 ]]; do
             UPLOAD=true
             shift
             ;;
+        --upload-job-id)
+            UPLOAD_JOB_ID="$2"
+            shift 2
+            ;;
+        --tree|-t)
+            TREE="$2"
+            shift 2
+            ;;
+        --datumaro-no-media)
+            DATUMARO_NO_MEDIA=true
+            shift
+            ;;
         --help|-h)
             echo "Usage: $0 [OPTIONS]"
             echo ""
             echo "Options:"
             echo "  --masks, -m MASKS       Masks to generate (comma-separated: pozadi,kura,suk,hniloba,trhlina or 'all')"
+            echo "  --tree, -t TREE         Process only one tree (for example: dub5)"
             echo "  --skip-extract          Skip extraction step if PNG files already exist"
             echo "  --skip-convert          Skip IMA to PNG conversion step"
             echo "  --skip-seg              Skip segmentation if expected masks already exist"
             echo "  --skip-datumaro         Skip Datumaro conversion if output zip already exists"
             echo "  --upload                Upload results to CVAT (requires CVAT_TOKEN and CVAT_PROJECT_ID)"
+            echo "  --upload-job-id JOB_ID  Import annotations into existing CVAT job (annotations only)"
+            echo "  --datumaro-no-media     Export Datumaro zip without image media (annotations only)"
             echo "  -h, --help              Show this help message"
             exit 0
             ;;
@@ -63,6 +81,10 @@ if [ -f .env ]; then
     set -a
     source .env 2>/dev/null || true
     set +a
+fi
+
+if [ -n "$UPLOAD_JOB_ID" ] || [ -n "${CVAT_JOB_ID:-}" ]; then
+    DATUMARO_NO_MEDIA=true
 fi
 
 input_root="src/ground_truth"
@@ -87,11 +109,14 @@ fi
 
 echo -e "${BLUE}Configuration:${NC}"
 echo -e "  Masks to generate: ${MASKS}"
+echo -e "  Tree filter: ${TREE:-<all>}"
 echo -e "  Skip extract: ${SKIP_EXTRACT}"
 echo -e "  Skip convert: ${SKIP_CONVERT}"
 echo -e "  Skip segmentation: ${SKIP_SEG}"
 echo -e "  Skip Datumaro: ${SKIP_DATUMARO}"
 echo -e "  Upload to CVAT: ${UPLOAD}"
+echo -e "  Upload Job ID: ${UPLOAD_JOB_ID:-<none>}"
+echo -e "  Datumaro no media: ${DATUMARO_NO_MEDIA}"
 echo ""
 
 # Cleanup on error
@@ -107,10 +132,14 @@ echo -e "${YELLOW}[1/5] Extracting zip files...${NC}"
 # Check if we should skip extraction
 if [ "$SKIP_EXTRACT" = true ]; then
     echo -e "${BLUE}  Skipping extraction (--skip-extract enabled)${NC}"
-    
-    # Still need to identify series from existing PNG directories
+
     series_list=()
-    if [ -d "$output_root" ]; then
+    if [ -n "$TREE" ]; then
+        candidate_dir="$output_root/$TREE"
+        if [ -d "$candidate_dir" ]; then
+            series_list+=("$TREE")
+        fi
+    elif [ -d "$output_root" ]; then
         for series_dir in "$output_root"/dub*; do
             if [ -d "$series_dir" ]; then
                 series_name=$(basename "$series_dir")
@@ -118,12 +147,17 @@ if [ "$SKIP_EXTRACT" = true ]; then
             fi
         done
     fi
-    
+
+    if [ -n "$TREE" ] && [ ${#series_list[@]} -eq 0 ]; then
+        echo -e "${RED}✗ Requested tree '$TREE' not found under $output_root.${NC}"
+        exit 1
+    fi
+
     if [ ${#series_list[@]} -eq 0 ]; then
         echo -e "${RED}✗ No existing PNG directories found. Cannot skip extraction.${NC}"
         exit 1
     fi
-    
+
     echo -e "${GREEN}✓ Found ${#series_list[@]} existing series${NC}"
 else
 
@@ -148,13 +182,18 @@ for zip_file in "${zip_files[@]}"; do
     basename="${zip_file##*/}"
     number="${basename//[^0-9]/}"
     series_name="dub$number"
+
+    if [ -n "$TREE" ] && [ "$series_name" != "$TREE" ]; then
+        continue
+    fi
+
     extract_dir="$temp_extract/$series_name"
-    
+
     mkdir -p "$extract_dir"
     unzip -q "$zip_file" -d "$extract_dir"
-    
+
     ima_files=($(find "$extract_dir" -name "*.IMA" -type f 2>/dev/null || echo))
-    
+
     if [ ${#ima_files[@]} -gt 0 ]; then
         flat_dir="$temp_extract/${series_name}_flat"
         mkdir -p "$flat_dir"
@@ -164,6 +203,11 @@ for zip_file in "${zip_files[@]}"; do
         series_list+=("$series_name")
     fi
 done
+
+if [ -n "$TREE" ] && [ ${#series_list[@]} -eq 0 ]; then
+    echo -e "${RED}✗ No IMA files found for requested tree '$TREE'.${NC}"
+    exit 1
+fi
 
 if [ ${#series_list[@]} -eq 0 ]; then
     echo -e "${RED}✗ No IMA files found${NC}"
@@ -270,12 +314,21 @@ for series in "${series_list[@]}"; do
         datumaro_files+=("$final_zip")
         continue
     fi
+
+    datumaro_args=()
+    if [ "$DATUMARO_NO_MEDIA" = true ]; then
+        datumaro_args+=(--no-media)
+        # Existing-job annotation import needs IDs matching task frame names.
+        # CVAT commonly expects extensionless frame ids for Datumaro imports.
+        datumaro_args+=(--item-id-mode relative_stem)
+    fi
     
     OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 NUMEXPR_NUM_THREADS=1 \
     poetry run python src/preprocessing/conversion/mask2datumaro.py \
         --segmentation-output "$segmentation_output" \
         --output "$final_zip" \
-        --task-name "$series" 2>/dev/null || {
+        --task-name "$series" \
+        "${datumaro_args[@]}" 2>/dev/null || {
         echo -e "${RED}✗ $series: Datumaro conversion failed${NC}"
         continue
     }
@@ -288,14 +341,22 @@ echo -e "${GREEN}✓ Datumaro datasets created${NC}"
 if [ "$UPLOAD" = true ]; then
     if [ ${#datumaro_files[@]} -eq 0 ]; then
         echo -e "${YELLOW}[5/5] No datumaro files to upload${NC}"
-    elif [ -z "${CVAT_TOKEN:-}" ] || [ -z "${CVAT_PROJECT_ID:-}" ]; then
-        echo -e "${RED}[5/5] Cannot upload: CVAT_TOKEN and CVAT_PROJECT_ID must be set in .env${NC}"
+    elif [ -z "${CVAT_TOKEN:-}" ]; then
+        echo -e "${RED}[5/5] Cannot upload: CVAT_TOKEN must be set in .env${NC}"
+        exit 1
+    elif [ -z "$UPLOAD_JOB_ID" ] && [ -z "${CVAT_JOB_ID:-}" ] && [ -z "${CVAT_PROJECT_ID:-}" ]; then
+        echo -e "${RED}[5/5] Cannot upload: set CVAT_PROJECT_ID or provide --upload-job-id/CVAT_JOB_ID${NC}"
         exit 1
     else
         echo -e "${YELLOW}[5/5] Uploading to CVAT...${NC}"
         upload_args=(--organization "${CVAT_ORGANIZATION:-BP}")
-        if [ -n "${CVAT_UPLOAD_FILE:-}" ]; then
+        if [ -n "$TREE" ]; then
+            upload_args+=(--file "datumaro_${TREE}.zip")
+        elif [ -n "${CVAT_UPLOAD_FILE:-}" ]; then
             upload_args+=(--file "${CVAT_UPLOAD_FILE}")
+        fi
+        if [ -n "$UPLOAD_JOB_ID" ]; then
+            upload_args+=(--job-id "$UPLOAD_JOB_ID")
         fi
 
         poetry run python src/preprocessing/upload_to_cvat.py "${upload_args[@]}" 2>/dev/null || {

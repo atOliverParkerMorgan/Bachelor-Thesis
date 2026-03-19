@@ -38,9 +38,7 @@ def extract_log_mask(img, min_area, close_kernel_size):
         contours = [
             contour for contour in all_contours if cv2.contourArea(contour) >= min_area
         ]
-
-    if not contours and all_contours:
-        contours = all_contours
+        
 
     if contours:
         largest_contour = max(contours, key=cv2.contourArea)
@@ -48,4 +46,4 @@ def extract_log_mask(img, min_area, close_kernel_size):
         cv2.drawContours(log_mask, [largest_contour], -1, 255, cv2.FILLED)
         return log_mask
 
-    raise ValueError("No contours found in thresholded log mask.")
+    return None
