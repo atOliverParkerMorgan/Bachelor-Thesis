@@ -9,6 +9,7 @@ import os
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
 from typing import Dict, List
@@ -16,6 +17,13 @@ from typing import Dict, List
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
+
+from src.nn_UNet.clusterfit_utils import (
+    SlurmJobSubmitter,
+    SlurmConfig,
+    build_slurm_config_from_args,
+    add_clusterfit_arguments,
+)
 
 DEFAULT_PLANNER = "nnUNetPlannerResEncL"
 PLANNER_FOR_PRESET = {
@@ -367,6 +375,7 @@ def build_parser() -> argparse.ArgumentParser:
     plan.add_argument("--plans-identifier", default=None)
     plan.add_argument("--configurations", nargs="+", default=None)
     plan.add_argument("--num-processes", type=int, default=None)
+    add_clusterfit_arguments(plan)
 
     train = subparsers.add_parser("train", help="Train nnU-Net model")
     train.add_argument("--configuration", default="3d_fullres")
@@ -382,6 +391,7 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Resume training from checkpoint_latest.pth (nnUNetv2_train --c)",
     )
+    add_clusterfit_arguments(train)
 
     predict = subparsers.add_parser("predict", help="Run nnU-Net inference")
     predict.add_argument("--input", type=Path, required=True, help="Folder with *_0000.nii.gz inputs")
@@ -390,6 +400,7 @@ def build_parser() -> argparse.ArgumentParser:
     predict.add_argument("--fold", default="0", help="Fold index or 'all'")
     add_hidden_legacy_planner_args(predict)
     predict.add_argument("--plans-identifier", default=None)
+    add_clusterfit_arguments(predict)
 
     predict_tree = subparsers.add_parser(
         "predict-tree",
@@ -608,6 +619,158 @@ def run_predict_tree(args: argparse.Namespace, env: Dict[str, str]) -> None:
         shutil.rmtree(args.temp_root / args.tree, ignore_errors=True)
 
 
+def submit_to_clusterfit(args: argparse.Namespace, env: Dict[str, str]) -> None:
+    """Submit current command to ClusterFIT via Slurm instead of running locally."""
+    # Build Slurm configuration
+    slurm_config = build_slurm_config_from_args(args, args.command)
+    
+    # Build the original command
+    cmd = [sys.executable, __file__]
+    
+    # Add subcommand and core arguments
+    cmd.append(args.command)
+    if args.nnunet_root:
+        cmd.extend(["--nnunet-root", str(args.nnunet_root)])
+    if args.dataset_id != 1:
+        cmd.extend(["--dataset-id", str(args.dataset_id)])
+    if args.dataset_name != "BPWoodDefects":
+        cmd.extend(["--dataset-name", args.dataset_name])
+    
+    # Add command-specific arguments
+    if args.command == "prepare":
+        cmd.extend(["--source", str(args.source)])
+        cmd.extend(["--geometry-root", str(args.geometry_root)])
+        if args.overwrite:
+            cmd.append("--overwrite")
+    
+    elif args.command == "plan":
+        if args.verify_dataset_integrity:
+            cmd.append("--verify-dataset-integrity")
+        if args.resenc_preset:
+            cmd.extend(["--resenc-preset", args.resenc_preset])
+        if args.planner:
+            cmd.extend(["--planner", args.planner])
+        if args.plans_identifier:
+            cmd.extend(["--plans-identifier", args.plans_identifier])
+        if args.configurations:
+            cmd.extend(["--configurations"] + args.configurations)
+        if args.num_processes:
+            cmd.extend(["--num-processes", str(args.num_processes)])
+    
+    elif args.command == "train":
+        cmd.extend(["--configuration", args.configuration])
+        cmd.extend(["--fold", str(args.fold)])
+        if args.planner:
+            cmd.extend(["--planner", args.planner])
+        if args.plans_identifier:
+            cmd.extend(["--plans-identifier", args.plans_identifier])
+        if args.trainer:
+            cmd.extend(["--trainer", args.trainer])
+        if args.save_every != 10:
+            cmd.extend(["--save-every", str(args.save_every)])
+        if args.skip_arch_plot:
+            cmd.append("--skip-arch-plot")
+        if args.initial_lr:
+            cmd.extend(["--initial-lr", str(args.initial_lr)])
+        if args.continue_training:
+            cmd.append("--continue-training")
+    
+    elif args.command == "predict":
+        cmd.extend(["--input", str(args.input)])
+        cmd.extend(["--output", str(args.output)])
+        cmd.extend(["--configuration", args.configuration])
+        cmd.extend(["--fold", str(args.fold)])
+        if args.plans_identifier:
+            cmd.extend(["--plans-identifier", args.plans_identifier])
+    
+    elif args.command == "predict-tree":
+        cmd.extend(["--tree", args.tree])
+        cmd.extend(["--input-root", str(args.input_root)])
+        cmd.extend(["--ground-truth-root", str(args.ground_truth_root)])
+        cmd.extend(["--segmentation-output-root", str(args.segmentation_output_root)])
+        cmd.extend(["--temp-root", str(args.temp_root)])
+        cmd.extend(["--configuration", args.configuration])
+        cmd.extend(["--fold", str(args.fold)])
+        if args.plans_identifier:
+            cmd.extend(["--plans-identifier", args.plans_identifier])
+        if args.make_datumaro:
+            cmd.append("--make-datumaro")
+        if args.datumaro_output:
+            cmd.extend(["--datumaro-output", str(args.datumaro_output)])
+        if args.upload_cvat:
+            cmd.append("--upload-cvat")
+        if args.organization:
+            cmd.extend(["--organization", args.organization])
+        if args.keep_temp:
+            cmd.append("--keep-temp")
+    
+    elif args.command == "all":
+        cmd.extend(["--source", str(args.source)])
+        cmd.extend(["--geometry-root", str(args.geometry_root)])
+        if args.overwrite:
+            cmd.append("--overwrite")
+        if args.skip_prepare:
+            cmd.append("--skip-prepare")
+        if args.planner:
+            cmd.extend(["--planner", args.planner])
+        if args.plans_identifier:
+            cmd.extend(["--plans-identifier", args.plans_identifier])
+        if args.configuration:
+            cmd.extend(["--configuration", args.configuration])
+        cmd.extend(["--fold", str(args.fold)])
+        if args.save_every != 10:
+            cmd.extend(["--save-every", str(args.save_every)])
+        if args.skip_arch_plot:
+            cmd.append("--skip-arch-plot")
+        if args.initial_lr:
+            cmd.extend(["--initial-lr", str(args.initial_lr)])
+        if args.continue_training:
+            cmd.append("--continue-training")
+        if args.plan_configurations:
+            cmd.extend(["--plan-configurations"] + args.plan_configurations)
+        if args.plan_num_processes:
+            cmd.extend(["--plan-num-processes", str(args.plan_num_processes)])
+    
+    # Build Slurm script
+    script_content = SlurmJobSubmitter.build_slurm_script(
+        job_command=cmd,
+        slurm_config=slurm_config,
+        env_vars=env,
+        modules_load=["cray-ccdb", "cray-mvapich2_pmix_nogpu"] if getattr(args, "arm_hpe_cpe", False) else None,
+    )
+    
+    # Write script to temporary file
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".sh", delete=False) as f:
+        f.write(script_content)
+        script_path = Path(f.name)
+    
+    log(f"Slurm script written to: {script_path}")
+    log(f"Partition: {slurm_config.partition}, Time: {slurm_config.time}")
+    if slurm_config.gres:
+        log(f"GPU: {slurm_config.gres}")
+    
+    # Make script executable
+    script_path.chmod(0o755)
+    
+    # Submit job
+    try:
+        job_id = SlurmJobSubmitter.submit_job(
+            script_path,
+            dry_run=args.slurm_dry_run,
+            wait=args.slurm_wait,
+        )
+        if job_id:
+            log(f"Job submitted successfully with ID: {job_id}")
+            if args.slurm_wait:
+                log("Job completed (--slurm-wait was set)")
+        else:
+            log("Job submission completed")
+    finally:
+        # Keep script for reference if requested or it's still needed
+        if not args.slurm_dry_run:
+            log(f"Slurm script saved at: {script_path}")
+
+
 def main() -> None:
     parser = build_parser()
     args = parser.parse_args()
@@ -616,6 +779,13 @@ def main() -> None:
 
     started = time.perf_counter()
     log(f"Running command: {args.command}")
+    
+    # Check if ClusterFIT submission is requested
+    if getattr(args, "clusterfit", False):
+        log("Submitting to ClusterFIT...")
+        submit_to_clusterfit(args, env)
+        log(f"Submission completed in {int(time.perf_counter() - started)}s")
+        return
 
     if args.command in {"prepare", "all"}:
         if args.command == "all" and args.skip_prepare:
