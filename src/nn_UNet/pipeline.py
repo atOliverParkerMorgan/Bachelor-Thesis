@@ -629,6 +629,27 @@ def submit_to_clusterfit(args: argparse.Namespace, env: Dict[str, str]) -> None:
     """Submit current command to ClusterFIT via Slurm instead of running locally."""
     SlurmJobSubmitter, _, build_slurm_config_from_args = import_clusterfit_helpers()
 
+    # Keep the generated script robust by exporting only the env vars required at runtime.
+    slurm_env: Dict[str, str] = {}
+    for key in (
+        "PATH",
+        "HOME",
+        "LANG",
+        "LC_ALL",
+        "LD_LIBRARY_PATH",
+        "VIRTUAL_ENV",
+        "PYTHONPATH",
+        "nnUNet_raw",
+        "nnUNet_preprocessed",
+        "nnUNet_results",
+        "NNUNET_SAVE_EVERY",
+        "NNUNET_INITIAL_LR",
+        "NNUNET_SKIP_ARCH_PLOT",
+    ):
+        value = env.get(key)
+        if value:
+            slurm_env[key] = value
+
     # Build Slurm configuration
     slurm_config = build_slurm_config_from_args(args, args.command)
     
@@ -742,7 +763,7 @@ def submit_to_clusterfit(args: argparse.Namespace, env: Dict[str, str]) -> None:
     script_content = SlurmJobSubmitter.build_slurm_script(
         job_command=cmd,
         slurm_config=slurm_config,
-        env_vars=env,
+        env_vars=slurm_env,
         modules_load=["cray-ccdb", "cray-mvapich2_pmix_nogpu"] if getattr(args, "arm_hpe_cpe", False) else None,
     )
     

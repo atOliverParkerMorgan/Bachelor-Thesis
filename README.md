@@ -183,7 +183,7 @@ Use the same commands with cluster flags.
 ```bash
 ./run_nnunet plan \
 	--clusterfit \
-	--slurm-partition fast \
+	--slurm-partition cpu \
 	--slurm-cpus-per-task 16 \
 	--slurm-time 04:00:00 \
 	--configurations 3d_lower
@@ -222,6 +222,12 @@ squeue -j JOB_ID
 tail -f slurm_logs/*.log
 ```
 
+Monitor:
+```bash
+
+squeue -u $USER
+tail -f slurm_logs/nnunet-plan_JOBID.log
+```
 ## 6) Predict one tree and export/upload
 
 ```bash
