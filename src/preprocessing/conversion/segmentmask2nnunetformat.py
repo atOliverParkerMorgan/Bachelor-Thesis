@@ -6,7 +6,9 @@ from __future__ import annotations
 import argparse
 import json
 import shutil
+import tempfile
 import unicodedata
+import zipfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, Iterable, List, Tuple
@@ -118,6 +120,90 @@ def write_nifti(volume_zyx: np.ndarray, out_path: Path, spacing_xyz: Tuple[float
     sitk.WriteImage(image, str(out_path), useCompression=True)
 
 
+def list_series_dirs(root: Path) -> List[Path]:
+    return sorted(
+        path
+        for path in root.iterdir()
+        if path.is_dir()
+        and path.name.startswith("dub")
+        and (path / "labelmap.txt").exists()
+        and (path / "SegmentationObject").exists()
+        and (path / "SegmentationClass").exists()
+    )
+
+
+def list_candidate_roots(source_root: Path) -> List[Path]:
+    project_root = Path(__file__).resolve().parents[3]
+    raw_candidates = [
+        source_root,
+        source_root / "Dataset001",
+        project_root / "datasets",
+        project_root / "datasets" / "Dataset001",
+        project_root / "src" / "nn_UNet" / "datasets",
+    ]
+
+    seen: set[Path] = set()
+    candidates: List[Path] = []
+    for candidate in raw_candidates:
+        resolved = candidate.resolve()
+        if resolved in seen:
+            continue
+        seen.add(resolved)
+        candidates.append(resolved)
+
+    return candidates
+
+
+def discover_series_dirs_from_roots(source_root: Path) -> tuple[Path, List[Path], tempfile.TemporaryDirectory[str] | None]:
+    candidates = list_candidate_roots(source_root)
+
+    # 1) Try already-extracted folder layouts.
+    for candidate in candidates:
+        if not candidate.exists():
+            continue
+        series_dirs = list_series_dirs(candidate)
+        if series_dirs:
+            return candidate, series_dirs, None
+
+    # 2) Try zip-based layout (for example src/nn_UNet/datasets/dub1_seg.zip).
+    zip_roots = [candidate for candidate in candidates if candidate.exists()]
+    for zip_root in zip_roots:
+        zip_files = sorted(path for path in zip_root.glob("*.zip") if path.name.startswith("dub"))
+        if not zip_files:
+            continue
+
+        temp_dir = tempfile.TemporaryDirectory(prefix="nnunet_prepare_")
+        temp_root = Path(temp_dir.name)
+
+        for zip_path in zip_files:
+            target_dir = temp_root / zip_path.stem
+            target_dir.mkdir(parents=True, exist_ok=True)
+            with zipfile.ZipFile(zip_path, "r") as zip_file:
+                zip_file.extractall(target_dir)
+
+        series_dirs = sorted(
+            path
+            for path in temp_root.rglob("*")
+            if path.is_dir()
+            and path.name.startswith("dub")
+            and (path / "labelmap.txt").exists()
+            and (path / "SegmentationObject").exists()
+            and (path / "SegmentationClass").exists()
+        )
+        if series_dirs:
+            return temp_root, series_dirs, temp_dir
+
+        temp_dir.cleanup()
+
+    checked = "\n - ".join(str(path) for path in candidates)
+    raise ValueError(
+        "No usable dub* series found. Checked roots:\n"
+        f" - {checked}\n"
+        "Expected extracted folders with labelmap.txt/SegmentationObject/SegmentationClass, "
+        "or zip files named dub*.zip."
+    )
+
+
 def generate_subvolumes(
     image_volume: np.ndarray,
     label_volume: np.ndarray,
@@ -161,18 +247,8 @@ def prepare_dataset(
     stride: Tuple[int, int, int] = (64, 128, 64),
     skip_empty_patches: bool = True,
 ) -> Path:
-    # Support both layouts:
-    # 1) datasets/Dataset001/dub*
-    # 2) datasets/dub*
     source_root = source_root.resolve()
-    if not source_root.exists():
-        if source_root.name == "Dataset001" and source_root.parent.exists():
-            source_root = source_root.parent
-        else:
-            raise FileNotFoundError(
-                f"Source root does not exist: {source_root}. "
-                "Expected either datasets/Dataset001 or datasets with dub* folders."
-            )
+    discovered_root, series_dirs, temp_dir = discover_series_dirs_from_roots(source_root)
 
     dataset_dirname = f"Dataset{dataset_id:03d}_{dataset_name}"
     raw_root = nnunet_root / "nnUNet_raw"
@@ -191,111 +267,103 @@ def prepare_dataset(
     for old_file in labels_tr.glob("*.nii.gz"):
         old_file.unlink()
 
-    series_dirs = sorted(path for path in source_root.iterdir() if path.is_dir() and path.name.startswith("dub"))
+    source_root = discovered_root
 
-    # If user pointed to datasets/ and series are nested in datasets/Dataset001,
-    # automatically descend one level.
-    if not series_dirs:
-        nested = source_root / "Dataset001"
-        if nested.exists():
-            series_dirs = sorted(path for path in nested.iterdir() if path.is_dir() and path.name.startswith("dub"))
-            if series_dirs:
-                source_root = nested
+    try:
+        ref_labels = parse_labelmap(series_dirs[0] / "labelmap.txt")
+        color_to_id: Dict[Tuple[int, int, int], int] = {}
+        labels_dict: Dict[str, int] = {"background": 0}
+        training_cases: List[str] = []
 
-    if not series_dirs:
-        raise ValueError(f"No dub* folders found in {source_root}")
-
-    ref_labels = parse_labelmap(series_dirs[0] / "labelmap.txt")
-    color_to_id: Dict[Tuple[int, int, int], int] = {}
-    labels_dict: Dict[str, int] = {"background": 0}
-    training_cases: List[str] = []
-
-    next_id = 1
-    for entry in ref_labels:
-        if entry.safe_name in BACKGROUND_ALIASES:
-            color_to_id[entry.color] = 0
-            continue
-        key = entry.safe_name
-        while key in labels_dict:
-            key = f"{entry.safe_name}_{next_id}"
-        labels_dict[key] = next_id
-        color_to_id[entry.color] = next_id
-        next_id += 1
-
-    for series_dir in series_dirs:
-        series_name = series_dir.name
-        current_labels = parse_labelmap(series_dir / "labelmap.txt")
-        if [(entry.original_name, entry.color) for entry in current_labels] != [
-            (entry.original_name, entry.color) for entry in ref_labels
-        ]:
-            raise ValueError(f"Label map mismatch in {series_dir / 'labelmap.txt'}")
-
-        slice_ids = parse_slice_list(series_dir, series_name)
-        spacing_xyz = load_spacing(geometry_root, series_name)
-
-        image_slices: List[np.ndarray] = []
-        label_slices: List[np.ndarray] = []
-
-        for slice_id in slice_ids:
-            image_path = series_dir / "SegmentationObject" / f"{slice_id}.png"
-            label_path = series_dir / "SegmentationClass" / f"{slice_id}.png"
-            if not image_path.exists() or not label_path.exists():
-                raise FileNotFoundError(f"Missing pair for {series_name}/{slice_id}")
-
-            image_gray = as_gray_array(image_path)
-            label_rgb = as_rgb_array(label_path)
-            label_ids = convert_mask_rgb_to_ids(label_rgb, color_to_id, label_path)
-
-            image_slices.append(image_gray)
-            label_slices.append(label_ids)
-
-        image_volume = np.stack(image_slices, axis=0).astype(np.uint8)
-        label_volume = np.stack(label_slices, axis=0).astype(np.uint8)
-
-        if image_volume.shape != label_volume.shape:
-            raise ValueError(
-                f"Image/label shape mismatch in {series_name}: {image_volume.shape} vs {label_volume.shape}"
-            )
-
-        case_counter = 0
-        for img_patch, lbl_patch in generate_subvolumes(
-            image_volume=image_volume,
-            label_volume=label_volume,
-            patch_size=patch_size,
-            stride=stride,
-        ):
-            if skip_empty_patches and np.sum(lbl_patch) == 0:
+        next_id = 1
+        for entry in ref_labels:
+            if entry.safe_name in BACKGROUND_ALIASES:
+                color_to_id[entry.color] = 0
                 continue
+            key = entry.safe_name
+            while key in labels_dict:
+                key = f"{entry.safe_name}_{next_id}"
+            labels_dict[key] = next_id
+            color_to_id[entry.color] = next_id
+            next_id += 1
 
-            case_name = f"{series_name}patch{case_counter:04d}"
-            image_out = images_tr / f"{case_name}_0000.nii.gz"
-            label_out = labels_tr / f"{case_name}.nii.gz"
+        for series_dir in series_dirs:
+            series_name = series_dir.name
+            current_labels = parse_labelmap(series_dir / "labelmap.txt")
+            if [(entry.original_name, entry.color) for entry in current_labels] != [
+                (entry.original_name, entry.color) for entry in ref_labels
+            ]:
+                raise ValueError(f"Label map mismatch in {series_dir / 'labelmap.txt'}")
 
-            write_nifti(img_patch, image_out, spacing_xyz)
-            write_nifti(lbl_patch, label_out, spacing_xyz)
+            slice_ids = parse_slice_list(series_dir, series_name)
+            spacing_xyz = load_spacing(geometry_root, series_name)
 
-            training_cases.append(case_name)
-            case_counter += 1
+            image_slices: List[np.ndarray] = []
+            label_slices: List[np.ndarray] = []
 
-        if case_counter == 0:
-            raise ValueError(
-                f"No valid patches produced for {series_name}. "
-                "Try reducing --patch-size and/or disabling --skip-empty-patches."
-            )
+            for slice_id in slice_ids:
+                image_path = series_dir / "SegmentationObject" / f"{slice_id}.png"
+                label_path = series_dir / "SegmentationClass" / f"{slice_id}.png"
+                if not image_path.exists() or not label_path.exists():
+                    raise FileNotFoundError(f"Missing pair for {series_name}/{slice_id}")
 
-    dataset_json = {
-        "name": dataset_name,
-        "description": "Wood log defect segmentation from Dataset001",
-        "channel_names": {"0": "grayscale"},
-        "labels": labels_dict,
-        "numTraining": len(training_cases),
-        "file_ending": ".nii.gz",
-        "overwrite_image_reader_writer": "SimpleITKIO",
-    }
-    with (dataset_root / "dataset.json").open("w", encoding="utf-8") as file_handle:
-        json.dump(dataset_json, file_handle, indent=2)
+                image_gray = as_gray_array(image_path)
+                label_rgb = as_rgb_array(label_path)
+                label_ids = convert_mask_rgb_to_ids(label_rgb, color_to_id, label_path)
 
-    return dataset_root
+                image_slices.append(image_gray)
+                label_slices.append(label_ids)
+
+            image_volume = np.stack(image_slices, axis=0).astype(np.uint8)
+            label_volume = np.stack(label_slices, axis=0).astype(np.uint8)
+
+            if image_volume.shape != label_volume.shape:
+                raise ValueError(
+                    f"Image/label shape mismatch in {series_name}: {image_volume.shape} vs {label_volume.shape}"
+                )
+
+            case_counter = 0
+            for img_patch, lbl_patch in generate_subvolumes(
+                image_volume=image_volume,
+                label_volume=label_volume,
+                patch_size=patch_size,
+                stride=stride,
+            ):
+                if skip_empty_patches and np.sum(lbl_patch) == 0:
+                    continue
+
+                case_name = f"{series_name}patch{case_counter:04d}"
+                image_out = images_tr / f"{case_name}_0000.nii.gz"
+                label_out = labels_tr / f"{case_name}.nii.gz"
+
+                write_nifti(img_patch, image_out, spacing_xyz)
+                write_nifti(lbl_patch, label_out, spacing_xyz)
+
+                training_cases.append(case_name)
+                case_counter += 1
+
+            if case_counter == 0:
+                raise ValueError(
+                    f"No valid patches produced for {series_name}. "
+                    "Try reducing --patch-size and/or disabling --skip-empty-patches."
+                )
+
+        dataset_json = {
+            "name": dataset_name,
+            "description": "Wood log defect segmentation from Dataset001",
+            "channel_names": {"0": "grayscale"},
+            "labels": labels_dict,
+            "numTraining": len(training_cases),
+            "file_ending": ".nii.gz",
+            "overwrite_image_reader_writer": "SimpleITKIO",
+        }
+        with (dataset_root / "dataset.json").open("w", encoding="utf-8") as file_handle:
+            json.dump(dataset_json, file_handle, indent=2)
+
+        return dataset_root
+    finally:
+        if temp_dir is not None:
+            temp_dir.cleanup()
 
 
 def build_parser() -> argparse.ArgumentParser:

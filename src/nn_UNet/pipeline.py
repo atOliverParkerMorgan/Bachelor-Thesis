@@ -632,17 +632,16 @@ def submit_to_clusterfit(args: argparse.Namespace, env: Dict[str, str]) -> None:
     # Build Slurm configuration
     slurm_config = build_slurm_config_from_args(args, args.command)
     
-    # Build the original command
+    # Build the original command.
+    # Global parser args must come before the subcommand for argparse.
     cmd = [sys.executable, __file__]
-    
-    # Add subcommand and core arguments
-    cmd.append(args.command)
     if args.nnunet_root:
         cmd.extend(["--nnunet-root", str(args.nnunet_root)])
     if args.dataset_id != 1:
         cmd.extend(["--dataset-id", str(args.dataset_id)])
     if args.dataset_name != "BPWoodDefects":
         cmd.extend(["--dataset-name", args.dataset_name])
+    cmd.append(args.command)
     
     # Add command-specific arguments
     if args.command == "prepare":
