@@ -11,9 +11,9 @@ echo 'Hostname: ' $(hostname)
 echo ''
 
 # Set nnU-Net directories
-export nnUNet_raw="${HOME}/Bachelor-Thesis/src/nn_UNet/nnunet_data/nnUNet_raw"
-export nnUNet_preprocessed="${HOME}/Bachelor-Thesis/src/nn_UNet/nnunet_data/nnUNet_preprocessed"
-export nnUNet_results="${HOME}/Bachelor-Thesis/src/nn_UNet/nnunet_data/nnUNet_results"
+export nnUNet_raw="${HOME}/Bachelor-Thesis/datasets/nnunet_data/nnUNet_raw"
+export nnUNet_preprocessed="${HOME}/Bachelor-Thesis/datasets/nnunet_data/nnUNet_preprocessed"
+export nnUNet_results="${HOME}/Bachelor-Thesis/datasets/nnunet_data/nnUNet_results"
 export PYTHONPATH="${HOME}/Bachelor-Thesis:${PYTHONPATH}"
 
 echo 'GPU info:'

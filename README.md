@@ -52,384 +52,194 @@ poetry run python src/preprocessing/conversion/ima2png.py \
 
 If the script is executable, you can also run:
 
-```bash
-poetry run src/preprocessing/conversion/ima2png.py \
-	--input src/ground_truth \
-	--output src/png
+# BP
+
+Simple workflow for wood-defect segmentation and nnU-Net training.
+
+## 1) Where to put data
+
+### Ground truth for extraction and segmentation pipeline
+
+Put your source zip files here:
+
+- src/ground_truth
+
+Example:
+
+```text
+src/ground_truth/
+	dub1.zip
+	dub2.zip
+	dub5.zip
 ```
 
-Convert PNG back to NIfTI:
+### Data for nnU-Net training input
 
-```bash
-poetry run python src/preprocessing/conversion/png2ima.py \
-	--input src/png \
-	--output src/output
+Put extracted per-tree folders here:
+
+- datasets/Dataset001
+
+Expected structure per tree:
+
+```text
+datasets/Dataset001/
+	dub1/
+		labelmap.txt
+		SegmentationObject/*.png
+		SegmentationClass/*.png
+		ImageSets/Segmentation/dub1.txt   (optional)
+	dub2/
+	dub5/
 ```
 
-Generate segmentation masks for wood defects:
+### Where nnU-Net generated data is stored
+
+The pipeline now uses:
+
+- datasets/nnunet_data/nnUNet_raw
+- datasets/nnunet_data/nnUNet_preprocessed
+- datasets/nnunet_data/nnUNet_results
+
+## 2) Install
 
 ```bash
-poetry run python src/preprocessing/segmentation/segmentation.py \
-	--tree dub1
+poetry install
 ```
 
-**Selective Mask Generation:**
+## 3) Segmentation commands (keep this)
 
-Generate only specific masks (saves processing time):
-
-```bash
-# Generate only bark and background
-poetry run python src/preprocessing/segmentation/segmentation.py \
-	--tree dub1 \
-	--masks kura pozadi
-
-# Generate only cracks
-poetry run python src/preprocessing/segmentation/segmentation.py \
-	--tree dub1 \
-	--masks trhlina
-```
-
-Segmentation now uses a fixed pipeline with only two CLI inputs:
-
-- `--tree` selects the source folder under `src/png/<tree>` and writes to `src/output/<tree>`
-- `--masks` selects which mask types to export
-
-**Output Masks:**
-
-The segmentation generates 5 mask types:
-
-- `pozadi/` — Background (non-wood areas)
-- `kura/` — Bark/crust (outer layer)
-- `suk/` — Knots (bright circular regions)
-- `hniloba/` — Decay/rot (within knot regions)
-- `trhlina/` — Cracks (elongated linear defects detected via gradient analysis)
-
-All masks use binary format: 255 for detected features, 0 for background.
-
-**Convert Masks to Datumaro Format:**
-
-Convert segmentation masks to Datumaro format for use with CVAT or other annotation tools:
+### Full segmentation pipeline
 
 ```bash
-poetry run python src/preprocessing/conversion/mask2datumaro.py \
-	--segmentation-output src/output/dub1 \
-	--output src/output/datumaro_dub1.zip \
-	--task-name dub1
-```
-
-The script automatically detects which masks are available and handles partial mask sets.
-
-## Full Pipeline
-
-Use the `run` script to execute the complete pipeline automatically:
-
-```bash
-# Run full pipeline (extract → convert → segment → export)
 ./run
+```
 
-# Generate only specific masks
+### Segmentation for one tree
+
+```bash
+poetry run python src/preprocessing/segmentation/segmentation.py --tree dub1
+```
+
+### Segmentation for one tree with selected masks
+
+```bash
+poetry run python src/preprocessing/segmentation/segmentation.py --tree dub1 --masks kura trhlina
+```
+
+### Useful run options
+
+```bash
 ./run --masks kura,pozadi
-
-# Skip extraction and conversion if files already exist
-./run --skip-extract --skip-convert
-
-# Enable CVAT upload (requires CVAT_TOKEN and CVAT_PROJECT_ID in .env)
-./run --upload
-
-# Combined example
-./run --masks trhlina,suk --skip-extract --upload
-
-# Useful
-./run --skip-extract --skip-convert --upload --masks pozadi  
-
-# Import only annotations to an existing CVAT job
-./run --skip-extract --skip-convert --upload --upload-job-id 12345 --masks pozadi
-
-# Import only one tree annotations to one existing CVAT job
+./run --skip-extract --skip-convert --masks trhlina,hniloba
 ./run --tree dub5 --skip-extract --skip-convert --upload --upload-job-id 12345 --masks pozadi
 ```
 
-**Pipeline Options:**
+## 4) nnU-Net on your computer (local)
 
-- `--masks, -m MASKS` — Masks to generate (comma-separated: pozadi,kura,suk,hniloba,trhlina or 'all')
-- `--tree, -t TREE` — Process only one tree (for example: dub5)
-- `--skip-extract` — Skip extraction if PNG files already exist
-- `--skip-convert` — Skip IMA→PNG conversion for existing files
-- `--upload` — Upload results to CVAT (requires credentials)
-- `--upload-job-id JOB_ID` — Import annotations only into an existing CVAT job
-- `--datumaro-no-media` — Export Datumaro without images (annotations only)
-- `-h, --help` — Show help message
-
-The pipeline automatically:
-1. Extracts IMA files from zip archives
-2. Converts IMA to PNG format
-3. Runs segmentation with specified masks
-4. Exports to Datumaro format
-5. Optionally uploads to CVAT
-
-## Configuration
-
-**Environment Variables:**
-
-For CVAT upload support, create a `.env` file in the project root:
-
-```bash
-CVAT_TOKEN=your_api_token_here
-CVAT_PROJECT_ID=your_project_id
-CVAT_JOB_ID=your_existing_job_id
-CVAT_ORGANIZATION=BP
-
-# Optional upload tuning (defaults shown)
-CVAT_MAX_CHUNK_MB=180
-CVAT_UPLOAD_ATTEMPTS=5
-CVAT_CONNECT_TIMEOUT=30
-CVAT_READ_TIMEOUT=1800
-```
-
-Then use `./run --upload` to automatically upload results.
-
-When using `--upload-job-id` (or `CVAT_JOB_ID`), the pipeline exports annotation-only Datumaro by default (no media files inside the zip), which is intended for importing labels into an existing CVAT job.
-
-**Segmentation Configs:**
-
-Segmentation defaults are defined in [src/preprocessing/segmentation/seg_config.py](src/preprocessing/segmentation/seg_config.py).
-
-Example parameter structure:
-```ini
-[segmentation]
-# Log extraction
-min_log_area = 127000
-log_close_kernel_size = 0
-
-# Bark segmentation
-crust_alpha = 1.45
-crust_beta = -50
-crust_wood_thresh = 220
-
-# Crack detection
-crack_threshold = 109
-crack_max_aspect_ratio = 0.5
-crack_max_roundness = 0.9
-```
-
-Optional: convert a single series folder or a single file:
-
-```bash
-poetry run python src/preprocessing/conversion/ima2png.py --target src/ground_truth/dub1
-```
-
-## Examples
-
-**Example 1: Process new data with default settings**
-```bash
-# Place your .zip files in src/ground_truth/
-./run
-```
-
-**Example 2: Reprocess with different masks**
-```bash
-# Already have PNGs, just regenerate specific masks
-./run --skip-extract --skip-convert --masks trhlina,hniloba
-```
-
-**Example 3: Quick crack-only analysis**
-```bash
-# Skip all preprocessing, generate only crack masks
-./run --skip-extract --skip-convert 
-```
-
-**Example 4: Full pipeline with upload**
-```bash
-# Process and upload to CVAT
-./run --upload
-```
-
-**Example 5: Segmentation for one tree with selected masks**
-```bash
-# Run segmentation for one tree and export only selected masks
-poetry run python src/preprocessing/segmentation/segmentation.py \
-	--tree dub2 \
-	--masks kura trhlina
-```
-
-**Example 6: Upload to cvat**
-```bash
- poetry run python src/preprocessing/upload_to_cvat.py
-```
-
-## Notes
-
-- Output PNGs are stored under task folders (e.g., subset1, subset2) to keep large series manageable
-
-## nnU-Net v2 (3D) Integration
-
-This repository now includes a dedicated nnU-Net pipeline under `src/nn_UNet/` with defaults tuned for `3d_fullres`.
-
-Residual Encoder presets are supported (`M`, `L`, `XL`) and default to `L`.
-When using these presets, please cite:
-
-Isensee, F.*, Wald, T.*, Ulrich, C.*, Baumgartner, M.*, Roy, S., Maier-Hein, K., Jaeger, P. (2024).
-nnU-Net Revisited: A Call for Rigorous Validation in 3D Medical Image Segmentation.
-arXiv:2404.09556.
-
-### Layout
-
-- `src/preprocessing/conversion/segmentmask2nnunetformat.py` - converts `datasets/Dataset001/dub*` slices into nnU-Net raw NIfTI volumes
-- `src/preprocessing/conversion/nnunet_predict.py` - converts one `src/png/dub*` tree to NIfTI inputs, restores predicted masks, and supports Datumaro/CVAT export
-- `src/nn_UNet/pipeline.py` - wrappers for prepare, plan/preprocess, train, and predict
-- `run_nnunet` - convenience launcher (`poetry run python src/nn_UNet/pipeline.py ...`)
-
-Prepared nnU-Net data will be stored in:
-
-- `src/nn_UNet/nnunet_data/nnUNet_raw/`
-- `src/nn_UNet/nnunet_data/nnUNet_preprocessed/`
-- `src/nn_UNet/nnunet_data/nnUNet_results/`
-
-### Train on Dataset001 (3D)
-
-Prepare dataset from `Dataset001`:
+### Step A: prepare Dataset001 to nnU-Net format
 
 ```bash
 ./run_nnunet prepare --overwrite
 ```
 
-Plan and preprocess:
+### Step B: plan and preprocess
 
 ```bash
 ./run_nnunet plan --verify-dataset-integrity
 ```
 
-Select a specific Residual Encoder preset:
+For 3d_lower profile:
 
 ```bash
-./run_nnunet plan --resenc-preset M
-./run_nnunet plan --resenc-preset L
-./run_nnunet plan --resenc-preset XL
+./run_nnunet plan --configurations 3d_lower --num-processes 1
 ```
 
-If preprocessing runs out of RAM, limit configs and worker processes:
+### Step C: train
+
+3d_fullres:
 
 ```bash
-./run_nnunet plan --configurations 3d_lowres --num-processes 1
+./run_nnunet train --configuration 3d_fullres --fold 0
 ```
 
-Train fold 0 using 3D full resolution (default configuration):
+3d_lower:
 
 ```bash
-./run_nnunet train --fold 0
+./run_nnunet train --configuration 3d_lower --fold 0
 ```
 
-Resume training from checkpoint (continue from latest checkpoint_latest.pth):
+Resume training:
 
 ```bash
-# Resume 2D training
-./run_nnunet train --configuration 2d --fold 0 --plans-identifier nnUNetResEncUNetLPlans --continue-training
-./run_nnunet train --configuration 2d --fold 0 --plans-identifier nnUNetResEncUNetLPlans --continue-training --save-every 10 --initial-lr 0.003
-# Resume 3D training
-./run_nnunet train --fold 0 --continue-training
+./run_nnunet train --configuration 3d_lower --fold 0 --continue-training
 ```
 
-Predict a whole tree, write segmentation-style masks to `src/output/<tree>`, and create a Datumaro zip. If `src/png/<tree>` is missing, the command first converts the matching source from `src/ground_truth` using the preprocessing conversion pipeline:
+## 5) nnU-Net on ClusterFIT
+
+Use the same commands with cluster flags.
+
+### Plan on CPU queue
 
 ```bash
-./run_nnunet predict-tree --tree dub5 --configuration 2d --fold 0 --plans-identifier nnUNetResEncUNetLPlans --make-datumaro
+./run_nnunet plan \
+	--clusterfit \
+	--slurm-partition fast \
+	--slurm-cpus-per-task 16 \
+	--slurm-time 04:00:00 \
+	--configurations 3d_lower
 ```
 
-Prediction now uses an automatic fast profile by default:
-
-- `--disable_tta` is applied automatically for speed
-- worker counts (`-npp`, `-nps`) are selected from detected GPU VRAM
-- no extra tuning flags are required for the common workflow
-
-You can also point it at a different ground-truth root if needed:
+### Train on GPU queue (recommended A100 40GB)
 
 ```bash
-./run_nnunet predict-tree --tree dub5 --ground-truth-root path/to/ground_truth --configuration 2d --fold 0 --plans-identifier nnUNetResEncUNetLPlans --make-datumaro
+./run_nnunet train \
+	--clusterfit \
+	--slurm-partition gpu \
+	--slurm-gpu a100_40 \
+	--slurm-time 24:00:00 \
+	--configuration 3d_lower \
+	--fold 0
 ```
 
-Upload that Datumaro archive to CVAT using the existing `.env` settings:
+### Predict on cluster
 
 ```bash
-./run_nnunet predict-tree --tree dub5 --configuration 2d --fold 0 --plans-identifier nnUNetResEncUNetLPlans --upload-cvat
+./run_nnunet predict \
+	--clusterfit \
+	--slurm-partition gpu \
+	--slurm-gpu a100_40 \
+	--input path/to/imagesTs \
+	--output path/to/predictions \
+	--configuration 3d_lower \
+	--fold 0
 ```
 
-Or run all three steps in one command:
+### Monitor jobs
 
 ```bash
-./run_nnunet all --overwrite --fold 0
+squeue -u $USER
+squeue -j JOB_ID
+tail -f slurm_logs/*.log
 ```
 
-Low-memory variant (preprocess only selected config with a single worker):
+## 6) Predict one tree and export/upload
 
 ```bash
-./run_nnunet all --overwrite --fold 0 --configuration 3d_lowres --plan-configurations 3d_lowres --plan-num-processes 1
+./run_nnunet predict-tree --tree dub5 --configuration 2d --fold 0 --make-datumaro
+./run_nnunet predict-tree --tree dub5 --configuration 2d --fold 0 --upload-cvat
 ```
 
-### Training Profiles (At PC vs Away)
+## 7) Useful project files
 
-If data is already prepared, skip that step:
+- [run](run)
+- [run_nnunet](run_nnunet)
+- [src/nn_UNet/pipeline.py](src/nn_UNet/pipeline.py)
+- [src/preprocessing/segmentation/segmentation.py](src/preprocessing/segmentation/segmentation.py)
+- [src/preprocessing/conversion/segmentmask2nnunetformat.py](src/preprocessing/conversion/segmentmask2nnunetformat.py)
 
-```bash
-./run_nnunet all --skip-prepare --overwrite --fold 0 --configuration 3d_lowres --plan-configurations 3d_lowres --plan-num-processes 1
-```
+## Notes
 
-Use this when you are actively using the computer (lower CPU pressure, shorter run):
+- If you only have zip files for segmentation workflow, place them in src/ground_truth and use ./run.
+- For nnU-Net training, data must be extracted into datasets/Dataset001/dubX folders.
+- If geometry exists, keep geometry.json under src/png/dubX for best spacing metadata.
 
-```bash
-nnUNet_n_proc_DA=1 OMP_NUM_THREADS=4 MKL_NUM_THREADS=4 \
-./run_nnunet train --resenc-preset L --configuration 3d_lowres --fold 0 --trainer nnUNetTrainer_50epochs
-```
-
-Use this when you are away and want a full run (higher load, better final quality), or to resume an existing 2D training run:
-
-```bash
-nnUNet_n_proc_DA=4 OMP_NUM_THREADS=4 MKL_NUM_THREADS=4 ./run_nnunet train --configuration 2d --fold 0 --plans-identifier nnUNetResEncUNetLPlans --continue-training
-```
-
-By default, `run_nnunet train` prefers the plans matching your preset (`nnUNetResEncUNetM/L/XLPlans`).
-If only legacy `nnUNetPlans` are available, the wrapper logs a warning and uses those plans.
-
-### Predict
-
-Inference expects nnU-Net style input files named like `case_0000.nii.gz` in an input folder.
-
-```bash
-./run_nnunet predict --input path/to/imagesTs --output path/to/predictions --fold 0
-```
-
-### Notes about Dataset001 conversion
-
-- One 3D case is generated per folder (`dub1`, `dub5`, `dub11`, ...)
-- Source images are read from `SegmentationObject/*.png`
-- Labels are read from `SegmentationClass/*.png` and converted from RGB colors via `labelmap.txt`
-- Voxel spacing is loaded from `src/png/<series>/geometry.json` when available
-- Geometry metadata is saved as geometry.json at the series root
-- Segmentation supports selective mask generation to optimize processing time
-- Crack detection uses gradient-based analysis with geometric descriptor filtering
-- Segmentation parameters are defined in `src/preprocessing/segmentation/seg_config.py`
-- The pipeline intelligently skips steps when output already exists
-- Datumaro export automatically handles partial mask sets
-
-## Segmentation Features
-
-**Mask Types:**
-1. **pozadi** (Background) — Non-wood areas, including the central hole
-2. **kura** (Bark) — Outer crust layer detected via contrast enhancement
-3. **suk** (Knots) — Bright circular regions in inner wood
-4. **hniloba** (Decay) — Dark rot areas within knots
-5. **trhlina** (Cracks) — Linear defects detected via Sobel gradient analysis
-
-**Key Algorithms:**
-- Log extraction using Otsu thresholding
-- Bark segmentation via contrast enhancement and morphological operations
-- Knot detection using intensity thresholding with Gaussian smoothing
-- Crack detection using gradient magnitude analysis with shape filtering
-- Decay detection using two-threshold segmentation within knot regions
-
-**Configurable Parameters:**
-
-Each mask type has tunable parameters in config files:
-- Threshold values for intensity-based segmentation
-- Kernel sizes for morphological operations
-- Minimum area filters for noise removal
-- Aspect ratio and roundness thresholds for shape classification

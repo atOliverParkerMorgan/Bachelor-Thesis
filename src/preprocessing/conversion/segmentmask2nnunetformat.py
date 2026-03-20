@@ -161,6 +161,19 @@ def prepare_dataset(
     stride: Tuple[int, int, int] = (64, 128, 64),
     skip_empty_patches: bool = True,
 ) -> Path:
+    # Support both layouts:
+    # 1) datasets/Dataset001/dub*
+    # 2) datasets/dub*
+    source_root = source_root.resolve()
+    if not source_root.exists():
+        if source_root.name == "Dataset001" and source_root.parent.exists():
+            source_root = source_root.parent
+        else:
+            raise FileNotFoundError(
+                f"Source root does not exist: {source_root}. "
+                "Expected either datasets/Dataset001 or datasets with dub* folders."
+            )
+
     dataset_dirname = f"Dataset{dataset_id:03d}_{dataset_name}"
     raw_root = nnunet_root / "nnUNet_raw"
     dataset_root = raw_root / dataset_dirname
@@ -179,6 +192,16 @@ def prepare_dataset(
         old_file.unlink()
 
     series_dirs = sorted(path for path in source_root.iterdir() if path.is_dir() and path.name.startswith("dub"))
+
+    # If user pointed to datasets/ and series are nested in datasets/Dataset001,
+    # automatically descend one level.
+    if not series_dirs:
+        nested = source_root / "Dataset001"
+        if nested.exists():
+            series_dirs = sorted(path for path in nested.iterdir() if path.is_dir() and path.name.startswith("dub"))
+            if series_dirs:
+                source_root = nested
+
     if not series_dirs:
         raise ValueError(f"No dub* folders found in {source_root}")
 
@@ -277,11 +300,16 @@ def prepare_dataset(
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Prepare Dataset001 for nnU-Net v2")
-    parser.add_argument("--source", type=Path, default=Path("datasets/Dataset001"), help="Source Dataset001 root")
+    parser.add_argument(
+        "--source",
+        type=Path,
+        default=Path("datasets"),
+        help="Source root containing dub* folders (supports datasets/ or datasets/Dataset001)",
+    )
     parser.add_argument(
         "--nnunet-root",
         type=Path,
-        default=Path("src/nn_UNet/nnunet_data"),
+        default=Path("datasets/nnunet_data"),
         help="Root where nnUNet_raw/preprocessed/results folders are stored",
     )
     parser.add_argument(

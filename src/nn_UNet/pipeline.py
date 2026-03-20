@@ -18,13 +18,6 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from src.nn_UNet.clusterfit_utils import (
-    SlurmJobSubmitter,
-    SlurmConfig,
-    build_slurm_config_from_args,
-    add_clusterfit_arguments,
-)
-
 DEFAULT_PLANNER = "nnUNetPlannerResEncL"
 PLANNER_FOR_PRESET = {
     "M": "nnUNetPlannerResEncM",
@@ -47,6 +40,17 @@ CHECKPOINT_CANDIDATES = [
     "checkpoint_best.pth",
     "checkpoint_latest.pth",
 ]
+DEFAULT_NNUNET_ROOT = Path("datasets/nnunet_data")
+
+
+def import_clusterfit_helpers():
+    from src.nn_UNet.clusterfit_utils import (
+        SlurmJobSubmitter,
+        add_clusterfit_arguments,
+        build_slurm_config_from_args,
+    )
+
+    return SlurmJobSubmitter, add_clusterfit_arguments, build_slurm_config_from_args
 
 
 def log(message: str) -> None:
@@ -350,6 +354,8 @@ def prediction_worker_profile(vram_gb: float | None) -> tuple[int, int]:
 
 
 def build_parser() -> argparse.ArgumentParser:
+    _, add_clusterfit_arguments, _ = import_clusterfit_helpers()
+
     def add_hidden_legacy_planner_args(subparser: argparse.ArgumentParser) -> None:
         # Keep backward compatibility for scripts that still pass these options,
         # but remove them from normal help output to keep CLI lean.
@@ -357,14 +363,14 @@ def build_parser() -> argparse.ArgumentParser:
         subparser.add_argument("--planner", default=None, help=argparse.SUPPRESS)
 
     parser = argparse.ArgumentParser(description="nnU-Net v2 pipeline for Dataset001")
-    parser.add_argument("--nnunet-root", type=Path, default=Path("src/nn_UNet/nnunet_data"))
+    parser.add_argument("--nnunet-root", type=Path, default=DEFAULT_NNUNET_ROOT)
     parser.add_argument("--dataset-id", type=int, default=1)
     parser.add_argument("--dataset-name", default="BPWoodDefects")
 
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     prep = subparsers.add_parser("prepare", help="Convert Dataset001 to nnU-Net raw format")
-    prep.add_argument("--source", type=Path, default=Path("datasets/Dataset001"))
+    prep.add_argument("--source", type=Path, default=Path("datasets"))
     prep.add_argument("--geometry-root", type=Path, default=Path("src/png"))
     prep.add_argument("--overwrite", action="store_true")
 
@@ -410,7 +416,7 @@ def build_parser() -> argparse.ArgumentParser:
     predict_tree.add_argument("--input-root", type=Path, default=Path("src/png"))
     predict_tree.add_argument("--ground-truth-root", type=Path, default=Path("src/ground_truth"))
     predict_tree.add_argument("--segmentation-output-root", type=Path, default=Path("src/output"))
-    predict_tree.add_argument("--temp-root", type=Path, default=Path("src/nn_UNet/nnunet_data/tree_inference"))
+    predict_tree.add_argument("--temp-root", type=Path, default=DEFAULT_NNUNET_ROOT / "tree_inference")
     predict_tree.add_argument("--configuration", default="2d")
     predict_tree.add_argument("--fold", default="0", help="Fold index or 'all'")
     predict_tree.add_argument("--plans-identifier", default=None)
@@ -422,7 +428,7 @@ def build_parser() -> argparse.ArgumentParser:
     add_hidden_legacy_planner_args(predict_tree)
 
     all_cmd = subparsers.add_parser("all", help="Prepare + plan + train")
-    all_cmd.add_argument("--source", type=Path, default=Path("datasets/Dataset001"))
+    all_cmd.add_argument("--source", type=Path, default=Path("datasets"))
     all_cmd.add_argument("--geometry-root", type=Path, default=Path("src/png"))
     all_cmd.add_argument("--overwrite", action="store_true")
     all_cmd.add_argument("--skip-prepare", action="store_true")
@@ -621,6 +627,8 @@ def run_predict_tree(args: argparse.Namespace, env: Dict[str, str]) -> None:
 
 def submit_to_clusterfit(args: argparse.Namespace, env: Dict[str, str]) -> None:
     """Submit current command to ClusterFIT via Slurm instead of running locally."""
+    SlurmJobSubmitter, _, build_slurm_config_from_args = import_clusterfit_helpers()
+
     # Build Slurm configuration
     slurm_config = build_slurm_config_from_args(args, args.command)
     
