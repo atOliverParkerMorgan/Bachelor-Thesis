@@ -224,7 +224,6 @@ tail -f slurm_logs/*.log
 
 Monitor:
 ```bash
-
 squeue -u $USER
 tail -f slurm_logs/nnunet-plan_JOBID.log
 ```
