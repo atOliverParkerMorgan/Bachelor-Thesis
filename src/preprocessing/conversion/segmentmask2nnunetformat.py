@@ -226,9 +226,24 @@ def generate_subvolumes(
     if sz <= 0 or sy <= 0 or sx <= 0:
         raise ValueError(f"Invalid stride: {stride}")
 
-    for z_idx in range(0, max(1, z_max - pz + 1), sz):
-        for y_idx in range(0, max(1, y_max - py + 1), sy):
-            for x_idx in range(0, max(1, x_max - px + 1), sx):
+    def axis_starts(axis_size: int, patch_len: int, step: int) -> List[int]:
+        if axis_size <= patch_len:
+            return [0]
+
+        starts = list(range(0, axis_size - patch_len + 1, step))
+        last_start = axis_size - patch_len
+        if starts[-1] != last_start:
+            # Ensure the tail of each axis is included so edge classes are not dropped.
+            starts.append(last_start)
+        return starts
+
+    z_starts = axis_starts(z_max, pz, sz)
+    y_starts = axis_starts(y_max, py, sy)
+    x_starts = axis_starts(x_max, px, sx)
+
+    for z_idx in z_starts:
+        for y_idx in y_starts:
+            for x_idx in x_starts:
                 img_patch = image_volume[z_idx : z_idx + pz, y_idx : y_idx + py, x_idx : x_idx + px]
                 lbl_patch = label_volume[z_idx : z_idx + pz, y_idx : y_idx + py, x_idx : x_idx + px]
                 if img_patch.shape != patch_size or lbl_patch.shape != patch_size:
@@ -273,6 +288,7 @@ def prepare_dataset(
         ref_labels = parse_labelmap(series_dirs[0] / "labelmap.txt")
         color_to_id: Dict[Tuple[int, int, int], int] = {}
         labels_dict: Dict[str, int] = {"background": 0}
+        class_voxel_counts: Dict[int, int] = {}
         training_cases: List[str] = []
 
         next_id = 1
@@ -285,6 +301,7 @@ def prepare_dataset(
                 key = f"{entry.safe_name}_{next_id}"
             labels_dict[key] = next_id
             color_to_id[entry.color] = next_id
+            class_voxel_counts[next_id] = 0
             next_id += 1
 
         for series_dir in series_dirs:
@@ -317,6 +334,12 @@ def prepare_dataset(
             image_volume = np.stack(image_slices, axis=0).astype(np.uint8)
             label_volume = np.stack(label_slices, axis=0).astype(np.uint8)
 
+            class_ids, class_counts = np.unique(label_volume, return_counts=True)
+            for class_id, count in zip(class_ids.tolist(), class_counts.tolist()):
+                class_int = int(class_id)
+                if class_int in class_voxel_counts:
+                    class_voxel_counts[class_int] += int(count)
+
             if image_volume.shape != label_volume.shape:
                 raise ValueError(
                     f"Image/label shape mismatch in {series_name}: {image_volume.shape} vs {label_volume.shape}"
@@ -347,6 +370,20 @@ def prepare_dataset(
                     f"No valid patches produced for {series_name}. "
                     "Try reducing --patch-size and/or disabling --skip-empty-patches."
                 )
+
+        missing_foreground = [
+            label_name
+            for label_name, class_id in labels_dict.items()
+            if class_id != 0 and class_voxel_counts.get(class_id, 0) == 0
+        ]
+        if missing_foreground:
+            missing_text = ", ".join(sorted(missing_foreground))
+            raise ValueError(
+                "Prepared dataset has zero voxels for foreground classes: "
+                f"{missing_text}. "
+                "This typically causes persistent 0.0 pseudo dice. "
+                "Check source SegmentationClass masks and labelmap colors for these classes."
+            )
 
         dataset_json = {
             "name": dataset_name,
