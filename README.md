@@ -23,19 +23,15 @@ src/ground_truth/
 
 Put extracted per-tree folders here:
 
-- datasets/Dataset001
 
 Expected structure per tree:
 
 ```text
-datasets/Dataset001/
-	dub1/
+	nn_Unent/dataset/dub1/
 		labelmap.txt
 		SegmentationObject/*.png
 		SegmentationClass/*.png
 		ImageSets/Segmentation/dub1.txt   (optional)
-	dub2/
-	dub5/
 ```
 
 ### Where nnU-Net generated data is stored
@@ -184,28 +180,8 @@ If training appears stuck before epoch logs on `3d_fullres`, use this safer comm
 	--slurm-gpu a100_40 \
 	--input ./predictions/src \
 	--output ./predictions/out \
-	--configuration 3d_fulres \
+	--configuration 3d_fullres \
 	--fold 0
-```
-
-### Monitor jobs
-
-```bash
-squeue -u $USER
-squeue -j JOB_ID
-tail -f slurm_logs/*.log
-```
-
-Monitor:
-```bash
-squeue -u $USER
-tail -f slurm_logs/nnunet-plan_JOBID.log
-```
-## 6) Predict one tree and export/upload
-
-```bash
-./run_nnunet predict-tree --tree dub5 --configuration 2d --fold 0 --make-datumaro
-./run_nnunet predict-tree --tree dub5 --configuration 2d --fold 0 --upload-cvat
 ```
 
 ## 7) Useful project files
@@ -219,16 +195,6 @@ tail -f slurm_logs/nnunet-plan_JOBID.log
 ## Notes
 
 - If you only have zip files for segmentation workflow, place them in src/ground_truth and use ./run.
-- For nnU-Net training, data must be extracted into datasets/Dataset001/dubX folders.
+- For nnU-Net training, data must be extracted into nn_Unet/datasets/Dataset001/dubX folders.
 - If geometry exists, keep geometry.json under src/png/dubX for best spacing metadata.
-
-### Predict one tree from Datumaro zip using 3d_fullres
-
-```bash
-# 1. Unzip the Datumaro dataset
-unzip predict-data/datumaro_dub4.zip -d predict-data/dub4
-
-# 2. Run nnU-Net prediction for dub4 using 3d_fullres model
-./run_nnunet predict-tree --tree dub4 --input-root predict-data --configuration 3d_fullres --fold 0 --make-datumaro
-```
 
