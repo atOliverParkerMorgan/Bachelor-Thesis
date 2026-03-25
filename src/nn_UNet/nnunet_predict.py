@@ -14,7 +14,7 @@ from PIL import Image
 
 from src.preprocessing.conversion.ima2png import process_series
 from src.preprocessing.conversion.mask2datumaro import export_datumaro_dataset
-from src.preprocessing.upload_to_cvat import upload_specific_file
+from src.preprocessing.utils.upload_to_cvat import upload_specific_file
 
 SEGMENTATION_STYLE_LABELS = {
     "background": "pozadi",

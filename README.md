@@ -1,59 +1,5 @@
 # BP
 
-Utilities for converting DICOM/IMA series to PNG slices (with geometry metadata) and back to 3D NIfTI.
-
-## Project structure
-
-- [src/preprocessing/conversion/ima2png.py](src/preprocessing/conversion/ima2png.py) — DICOM/IMA → PNG slices + geometry.json
-- [src/preprocessing/conversion/png2ima.py](src/preprocessing/conversion/png2ima.py) — PNG slices + geometry.json → .nii.gz
-- [src/preprocessing/conversion/mask2datumaro.py](src/preprocessing/conversion/mask2datumaro.py) — Segmentation masks → Datumaro format
-- [src/preprocessing/segmentation/segmentation.py](src/preprocessing/segmentation/segmentation.py) — Wood defect segmentation
-- [src/preprocessing/segmentation/seg_config.py](src/preprocessing/segmentation/seg_config.py) — Segmentation parameter defaults
-- [run](run) — Full automated pipeline script
-- [src/ground_truth](src/ground_truth) — Sample input data (IMA files)
-
-## Requirements
-
-- Python 3.10+
-- Poetry
-- (For training) PyTorch build matching your CPU/CUDA setup
-
-## Install
-
-```bash
-poetry install
-```
-
-If you need a specific PyTorch build (recommended for GPU training), install it after `poetry install`.
-
-## Quick Start
-
-Run the full automated pipeline on your data:
-
-```bash
-./run
-```
-
-Or with custom options:
-
-```bash
-./run --masks kura,suk --skip-extract
-```
-
-## Usage
-
-Convert DICOM/IMA series to PNG (mirrors input folder structure):
-
-```bash
-poetry run python src/preprocessing/conversion/ima2png.py \
-	--input src/ground_truth \
-	--output src/png
-```
-
-If the script is executable, you can also run:
-
-# BP
-
 Simple workflow for wood-defect segmentation and nnU-Net training.
 
 ## 1) Where to put data
@@ -132,6 +78,9 @@ poetry run python src/preprocessing/segmentation/segmentation.py --tree dub1 --m
 ./run --masks kura,pozadi
 ./run --skip-extract --skip-convert --masks trhlina,hniloba
 ./run --tree dub5 --skip-extract --skip-convert --upload --upload-job-id 12345 --masks pozadi
+
+# predictions
+./run --tree dub4 --clean-logs-only
 ```
 
 ## 4) nnU-Net on your computer (local)
@@ -208,9 +157,9 @@ Use the same commands with cluster flags.
 	--clusterfit \
 	--slurm-partition gpu \
 	--slurm-gpu a100_40 \
-	--input path/to/imagesTs \
-	--output path/to/predictions \
-	--configuration 3d_lower \
+	--input ./predictions/src \
+	--output ./predictions/out \
+	--configuration 3d_fulres \
 	--fold 0
 ```
 
@@ -242,4 +191,14 @@ tail -f slurm_logs/*.log
 - If you only have zip files for segmentation workflow, place them in src/ground_truth and use ./run.
 - For nnU-Net training, data must be extracted into datasets/Dataset001/dubX folders.
 - If geometry exists, keep geometry.json under src/png/dubX for best spacing metadata.
+
+### Predict one tree from Datumaro zip using 3d_fullres
+
+```bash
+# 1. Unzip the Datumaro dataset
+unzip predict-data/datumaro_dub4.zip -d predict-data/dub4
+
+# 2. Run nnU-Net prediction for dub4 using 3d_fullres model
+./run_nnunet predict-tree --tree dub4 --input-root predict-data --configuration 3d_fullres --fold 0 --make-datumaro
+```
 

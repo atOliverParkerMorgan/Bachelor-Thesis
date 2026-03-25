@@ -525,9 +525,9 @@ def run_predict(args: argparse.Namespace, env: Dict[str, str]) -> None:
         cmd.extend(["-chk", checkpoint_name])
         log(f"Using prediction checkpoint: {checkpoint_name}")
 
-    # TTA improves robustness by averaging multiple augmented predictions,
-    # but it substantially slows inference. Keep it off for fast predictions.
-    cmd.append("--disable_tta")
+    # # TTA improves robustness by averaging multiple augmented predictions,
+    # # but it substantially slows inference. Keep it off for fast predictions.
+    # cmd.append("--disable_tta")
     vram_gb = detect_gpu_vram_gb()
     npp, nps = prediction_worker_profile(vram_gb)
     cmd.extend(["-npp", str(npp), "-nps", str(nps)])
@@ -539,7 +539,7 @@ def run_predict(args: argparse.Namespace, env: Dict[str, str]) -> None:
 
 
 def run_predict_tree(args: argparse.Namespace, env: Dict[str, str]) -> None:
-    from src.preprocessing.conversion.nnunet_predict import (
+    from src.nn_UNet.nnunet_predict import (
         default_datumaro_output,
         export_datumaro_for_tree,
         export_prediction_masks,
