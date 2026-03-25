@@ -127,12 +127,17 @@ Resume training:
 
 Use the same commands with cluster flags.
 
+### Prepare
+```bash
+./run_nnunet prepare --overwrite --clusterfit --slurm-partition cpu --slurm-cpus-per-task 16 --slurm-time 02:00:00
+```
+
 ### Plan on CPU queue
 
 ```bash
 ./run_nnunet plan \
 	--clusterfit \
-	--slurm-partition fast \
+	--slurm-partition cpu \
 	--slurm-cpus-per-task 16 \
 	--slurm-time 04:00:00 \
 	--configurations 3d_lower
@@ -144,9 +149,29 @@ Use the same commands with cluster flags.
 ./run_nnunet train \
 	--clusterfit \
 	--slurm-partition gpu \
+	--slurm-cpus-per-task 8 \
 	--slurm-gpu a100_40 \
 	--slurm-time 24:00:00 \
 	--configuration 3d_lower \
+	--compile off \
+	--n-proc-da 4 \
+	--cpu-threads 1 \
+	--fold 0
+```
+
+If training appears stuck before epoch logs on `3d_fullres`, use this safer command:
+
+```bash
+./run_nnunet train \
+	--clusterfit \
+	--slurm-partition gpu \
+	--slurm-cpus-per-task 8 \
+	--slurm-gpu a100_40 \
+	--slurm-time 24:00:00 \
+	--configuration 3d_fullres \
+	--compile off \
+	--n-proc-da 4 \
+	--cpu-threads 1 \
 	--fold 0
 ```
 
@@ -171,6 +196,11 @@ squeue -j JOB_ID
 tail -f slurm_logs/*.log
 ```
 
+Monitor:
+```bash
+squeue -u $USER
+tail -f slurm_logs/nnunet-plan_JOBID.log
+```
 ## 6) Predict one tree and export/upload
 
 ```bash

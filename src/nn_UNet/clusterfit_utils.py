@@ -3,16 +3,21 @@
 from __future__ import annotations
 
 import argparse
+import re
+import shlex
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional, Dict
 
 
+SAFE_ENV_KEY = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+
 @dataclass
 class SlurmConfig:
     """Configuration for Slurm job submission."""
-    partition: str = "fast"  # fast, gpu, arm_fast
+    partition: str = "fast"  # fast, long, serial, cpu, gpu, amd, arm_*
     nodes: int = 1
     time: str = "00:30:00"  # HH:MM:SS
     job_name: str = "nnunet"
@@ -62,8 +67,15 @@ class SlurmJobSubmitter:
 
     CPU_PARTITIONS = {
         "fast": "fast CPU partition (amd64/x86_64, 64GB RAM)",
+        "long": "long CPU partition (amd64/x86_64)",
+        "serial": "serial CPU partition (single-node jobs)",
+        "cpu": "cpu partition (amd64/x86_64, long-running jobs)",
+        "vip": "vip partition (special access)",
         "gpu": "GPU partition (amd64/x86_64)",
         "arm_fast": "ARM partition (aarch64, 32GB RAM)",
+        "arm_long": "ARM partition (aarch64)",
+        "arm_serial": "ARM serial partition (single-node jobs)",
+        "arm_vip": "ARM vip partition (special access)",
         "amd": "AMD GPU partition (amd64/x86_64, 512GB RAM)",
     }
 
@@ -88,6 +100,9 @@ class SlurmJobSubmitter:
         modules_load: list[str] | None = None,
     ) -> str:
         """Build a Slurm batch script."""
+        if not job_command:
+            raise ValueError("job_command must not be empty")
+
         script_lines = ["#!/bin/bash"]
         
         # Add SBATCH directives
@@ -104,19 +119,30 @@ class SlurmJobSubmitter:
         if modules_load:
             script_lines.append("# Load environment modules")
             for module in modules_load:
-                script_lines.append(f"module load {module}")
+                script_lines.append(f"module load {shlex.quote(module)}")
             script_lines.append("")
         
         # Set environment variables
         if env_vars:
             script_lines.append("# Set environment variables")
+            skipped = 0
             for key, value in env_vars.items():
-                script_lines.append(f"export {key}=\"{value}\"")
+                if not SAFE_ENV_KEY.match(key):
+                    skipped += 1
+                    continue
+                if "\n" in value or "\r" in value:
+                    skipped += 1
+                    continue
+                script_lines.append(f"export {key}={shlex.quote(value)}")
+            if skipped:
+                script_lines.append(
+                    f"echo 'Warning: skipped {skipped} unsupported environment variables' >&2"
+                )
             script_lines.append("")
         
         # Run the job
         script_lines.append("# Run job")
-        script_lines.append(" ".join(job_command))
+        script_lines.append(" ".join(shlex.quote(part) for part in job_command))
         
         script_lines.append("")
         script_lines.append("echo 'Job finished at ' $(date)")
@@ -180,7 +206,19 @@ def add_clusterfit_arguments(subparser: argparse.ArgumentParser) -> None:
     )
     group.add_argument(
         "--slurm-partition",
-        choices=["fast", "gpu", "arm_fast", "amd"],
+        choices=[
+            "fast",
+            "long",
+            "serial",
+            "cpu",
+            "vip",
+            "gpu",
+            "amd",
+            "arm_fast",
+            "arm_long",
+            "arm_serial",
+            "arm_vip",
+        ],
         default="fast",
         help="ClusterFIT partition to use (default: fast)",
     )
@@ -249,6 +287,13 @@ def build_slurm_config_from_args(
     command_name: str,
 ) -> SlurmConfig:
     """Build SlurmConfig from parsed arguments."""
+    def parse_hhmmss_to_minutes(value: str) -> int:
+        parts = value.split(":")
+        if len(parts) != 3:
+            raise ValueError(f"Invalid Slurm time format '{value}'. Expected HH:MM:SS.")
+        hours, minutes, seconds = (int(part) for part in parts)
+        return hours * 60 + minutes + (1 if seconds > 0 else 0)
+
     # Determine time limits based on command
     time_limits = {
         "prepare": "01:00:00",
@@ -259,6 +304,28 @@ def build_slurm_config_from_args(
     }
     default_time = time_limits.get(command_name, "02:00:00")
     time_limit = args.slurm_time or default_time
+
+    # Fail fast for obviously invalid combinations to avoid pending jobs that never start.
+    partition_max_minutes = {
+        "fast": 1,
+        "long": 10,
+        "serial": 25,
+        "cpu": 10080,
+        "vip": 1440,
+        "arm_fast": 1,
+        "arm_long": 10,
+        "arm_serial": 25,
+        "arm_vip": 1440,
+        "amd": 360,
+        "gpu": 10080,
+    }
+    max_minutes = partition_max_minutes.get(args.slurm_partition)
+    if max_minutes is not None and parse_hhmmss_to_minutes(time_limit) > max_minutes:
+        raise ValueError(
+            "Requested --slurm-time exceeds partition limit: "
+            f"partition='{args.slurm_partition}', requested='{time_limit}', "
+            f"max={max_minutes} minute(s)."
+        )
 
     # Determine job name
     job_name = args.slurm_job_name or f"nnunet-{command_name}"

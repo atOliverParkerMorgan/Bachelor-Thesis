@@ -85,6 +85,9 @@ def ensure_env(nnunet_root: Path) -> Dict[str, str]:
 
 
 def apply_runtime_env_overrides(env: Dict[str, str], args: argparse.Namespace) -> None:
+    # Make training logs visible in Slurm output without long buffering delays.
+    env["PYTHONUNBUFFERED"] = "1"
+
     save_every = getattr(args, "save_every", None)
     if save_every is not None:
         env["NNUNET_SAVE_EVERY"] = str(save_every)
@@ -95,6 +98,26 @@ def apply_runtime_env_overrides(env: Dict[str, str], args: argparse.Namespace) -
 
     if getattr(args, "skip_arch_plot", False):
         env["NNUNET_SKIP_ARCH_PLOT"] = "1"
+
+    compile_mode = getattr(args, "compile", None)
+    if compile_mode == "off":
+        # nnU-Net v2 checks this env var to decide whether torch.compile is used.
+        env["nnUNet_compile"] = "0"
+    elif compile_mode == "on":
+        env["nnUNet_compile"] = "1"
+
+    n_proc_da = getattr(args, "n_proc_da", None)
+    if n_proc_da is not None:
+        env["nnUNet_n_proc_DA"] = str(n_proc_da)
+
+    cpu_threads = getattr(args, "cpu_threads", None)
+    if cpu_threads is not None:
+        thread_count = str(cpu_threads)
+        # Avoid oversubscription in augmentation workers on shared cluster nodes.
+        env["OMP_NUM_THREADS"] = thread_count
+        env["MKL_NUM_THREADS"] = thread_count
+        env["OPENBLAS_NUM_THREADS"] = thread_count
+        env["NUMEXPR_NUM_THREADS"] = thread_count
 
 
 def run_cmd(command: List[str], env: Dict[str, str], label: str) -> None:
@@ -373,6 +396,7 @@ def build_parser() -> argparse.ArgumentParser:
     prep.add_argument("--source", type=Path, default=Path("datasets"))
     prep.add_argument("--geometry-root", type=Path, default=Path("src/png"))
     prep.add_argument("--overwrite", action="store_true")
+    add_clusterfit_arguments(prep)
 
     plan = subparsers.add_parser("plan", help="Run nnU-Net planning and preprocessing")
     plan.add_argument("--verify-dataset-integrity", action="store_true")
@@ -392,6 +416,24 @@ def build_parser() -> argparse.ArgumentParser:
     train.add_argument("--save-every", type=int, default=10)
     train.add_argument("--skip-arch-plot", action="store_true")
     train.add_argument("--initial-lr", type=float, default=None)
+    train.add_argument(
+        "--compile",
+        choices=["auto", "on", "off"],
+        default="auto",
+        help="Control torch.compile usage (default: auto). Use 'off' if startup hangs before epoch 0.",
+    )
+    train.add_argument(
+        "--n-proc-da",
+        type=int,
+        default=4,
+        help="Number of nnU-Net data augmentation worker processes (default: 4).",
+    )
+    train.add_argument(
+        "--cpu-threads",
+        type=int,
+        default=1,
+        help="Threads per process for BLAS/OpenMP libs (default: 1).",
+    )
     train.add_argument(
         "--continue-training",
         action="store_true",
@@ -439,9 +481,28 @@ def build_parser() -> argparse.ArgumentParser:
     all_cmd.add_argument("--save-every", type=int, default=10)
     all_cmd.add_argument("--skip-arch-plot", action="store_true")
     all_cmd.add_argument("--initial-lr", type=float, default=None)
+    all_cmd.add_argument(
+        "--compile",
+        choices=["auto", "on", "off"],
+        default="auto",
+        help="Control torch.compile usage for the train phase (default: auto).",
+    )
+    all_cmd.add_argument(
+        "--n-proc-da",
+        type=int,
+        default=4,
+        help="Number of nnU-Net data augmentation worker processes for training (default: 4).",
+    )
+    all_cmd.add_argument(
+        "--cpu-threads",
+        type=int,
+        default=1,
+        help="Threads per process for BLAS/OpenMP libs during training (default: 1).",
+    )
     all_cmd.add_argument("--continue-training", action="store_true")
     all_cmd.add_argument("--plan-configurations", nargs="+", default=["3d_fullres"])
     all_cmd.add_argument("--plan-num-processes", type=int, default=1)
+    add_clusterfit_arguments(all_cmd)
 
     return parser
 
@@ -629,6 +690,34 @@ def submit_to_clusterfit(args: argparse.Namespace, env: Dict[str, str]) -> None:
     """Submit current command to ClusterFIT via Slurm instead of running locally."""
     SlurmJobSubmitter, _, build_slurm_config_from_args = import_clusterfit_helpers()
 
+    # Keep the generated script robust by exporting only the env vars required at runtime.
+    slurm_env: Dict[str, str] = {}
+    for key in (
+        "PATH",
+        "HOME",
+        "LANG",
+        "LC_ALL",
+        "LD_LIBRARY_PATH",
+        "VIRTUAL_ENV",
+        "PYTHONPATH",
+        "PYTHONUNBUFFERED",
+        "nnUNet_raw",
+        "nnUNet_preprocessed",
+        "nnUNet_results",
+        "NNUNET_SAVE_EVERY",
+        "NNUNET_INITIAL_LR",
+        "NNUNET_SKIP_ARCH_PLOT",
+        "nnUNet_compile",
+        "nnUNet_n_proc_DA",
+        "OMP_NUM_THREADS",
+        "MKL_NUM_THREADS",
+        "OPENBLAS_NUM_THREADS",
+        "NUMEXPR_NUM_THREADS",
+    ):
+        value = env.get(key)
+        if value:
+            slurm_env[key] = value
+
     # Build Slurm configuration
     slurm_config = build_slurm_config_from_args(args, args.command)
     
@@ -679,6 +768,12 @@ def submit_to_clusterfit(args: argparse.Namespace, env: Dict[str, str]) -> None:
             cmd.append("--skip-arch-plot")
         if args.initial_lr:
             cmd.extend(["--initial-lr", str(args.initial_lr)])
+        if args.compile != "auto":
+            cmd.extend(["--compile", args.compile])
+        if args.n_proc_da != 4:
+            cmd.extend(["--n-proc-da", str(args.n_proc_da)])
+        if args.cpu_threads != 1:
+            cmd.extend(["--cpu-threads", str(args.cpu_threads)])
         if args.continue_training:
             cmd.append("--continue-training")
     
@@ -731,6 +826,12 @@ def submit_to_clusterfit(args: argparse.Namespace, env: Dict[str, str]) -> None:
             cmd.append("--skip-arch-plot")
         if args.initial_lr:
             cmd.extend(["--initial-lr", str(args.initial_lr)])
+        if args.compile != "auto":
+            cmd.extend(["--compile", args.compile])
+        if args.n_proc_da != 4:
+            cmd.extend(["--n-proc-da", str(args.n_proc_da)])
+        if args.cpu_threads != 1:
+            cmd.extend(["--cpu-threads", str(args.cpu_threads)])
         if args.continue_training:
             cmd.append("--continue-training")
         if args.plan_configurations:
@@ -742,7 +843,7 @@ def submit_to_clusterfit(args: argparse.Namespace, env: Dict[str, str]) -> None:
     script_content = SlurmJobSubmitter.build_slurm_script(
         job_command=cmd,
         slurm_config=slurm_config,
-        env_vars=env,
+        env_vars=slurm_env,
         modules_load=["cray-ccdb", "cray-mvapich2_pmix_nogpu"] if getattr(args, "arm_hpe_cpe", False) else None,
     )
     
