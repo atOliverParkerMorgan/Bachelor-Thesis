@@ -38,9 +38,9 @@ Expected structure per tree:
 
 The pipeline now uses:
 
-- datasets/nnunet_data/nnUNet_raw
-- datasets/nnunet_data/nnUNet_preprocessed
-- datasets/nnunet_data/nnUNet_results
+- src/nn_Unet/nnunet_data/nnUNet_raw
+- src/nn_Unet/nnunet_data/nnUNet_preprocessed
+- src/nn_Unet/nnunet_data/nnUNet_results
 
 ## 2) Install
 
@@ -178,8 +178,8 @@ If training appears stuck before epoch logs on `3d_fullres`, use this safer comm
 	--clusterfit \
 	--slurm-partition gpu \
 	--slurm-gpu a100_40 \
-	--input ./predictions/src \
-	--output ./predictions/out \
+	--input ./src/ground_truth/DUB_4.zip \
+	--output ./predictions \
 	--configuration 3d_fullres \
 	--fold 0
 ```

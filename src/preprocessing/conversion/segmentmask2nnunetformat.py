@@ -410,7 +410,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--nnunet-root",
                 type=Path,
-                default=Path("./src/nn_UNet/datasets/nnunet_data"),
+                default=Path("./src/nn_UNet/nnunet_data"),
         help="Root where nnUNet_raw/preprocessed/results folders are stored",
     )
     parser.add_argument(
