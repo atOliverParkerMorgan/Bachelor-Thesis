@@ -13,8 +13,10 @@ UPLOAD=false
 UPLOAD_JOB_ID=""
 TREE=""
 DATUMARO_NO_MEDIA=false
+CLEAN_LOGS_ONLY=false
 
 # Parse arguments
+
 while [[ $# -gt 0 ]]; do
     case $1 in
         --masks|-m)
@@ -53,6 +55,10 @@ while [[ $# -gt 0 ]]; do
             DATUMARO_NO_MEDIA=true
             shift
             ;;
+        --clean-logs-only)
+            CLEAN_LOGS_ONLY=true
+            shift
+            ;;
         --help|-h)
             echo "Usage: $0 [OPTIONS]"
             echo ""
@@ -66,6 +72,7 @@ while [[ $# -gt 0 ]]; do
             echo "  --upload                Upload results to CVAT (requires CVAT_TOKEN and CVAT_PROJECT_ID)"
             echo "  --upload-job-id JOB_ID  Import annotations into existing CVAT job (annotations only)"
             echo "  --datumaro-no-media     Export Datumaro zip without image media (annotations only)"
+            echo "  --clean-logs-only       Only remove/report invalid logs (no segmentation)"
             echo "  -h, --help              Show this help message"
             exit 0
             ;;
@@ -107,6 +114,7 @@ else
     IFS=',' read -r -a expected_masks <<< "$MASKS"
 fi
 
+
 echo -e "${BLUE}Configuration:${NC}"
 echo -e "  Masks to generate: ${MASKS}"
 echo -e "  Tree filter: ${TREE:-<all>}"
@@ -117,7 +125,19 @@ echo -e "  Skip Datumaro: ${SKIP_DATUMARO}"
 echo -e "  Upload to CVAT: ${UPLOAD}"
 echo -e "  Upload Job ID: ${UPLOAD_JOB_ID:-<none>}"
 echo -e "  Datumaro no media: ${DATUMARO_NO_MEDIA}"
+echo -e "  Clean logs only: ${CLEAN_LOGS_ONLY}"
 echo ""
+
+# If only cleaning logs, run segmentation script with --clean-logs-only and exit
+if [ "$CLEAN_LOGS_ONLY" = true ]; then
+    if [ -z "$TREE" ]; then
+        echo -e "${RED}✗ --clean-logs-only requires --tree <tree_name>${NC}"
+        exit 1
+    fi
+    echo -e "${YELLOW}[CLEAN] Removing invalid logs for tree: $TREE${NC}"
+    poetry run python -m src.preprocessing.segmentation.segmentation --tree "$TREE" --clean-logs-only
+    exit $?
+fi
 
 # Cleanup on error
 cleanup() {

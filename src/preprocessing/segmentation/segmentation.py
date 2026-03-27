@@ -124,6 +124,11 @@ def build_parser():
         help="Masks to generate (default: all)",
     )
     
+    parser.add_argument(
+        "--clean-logs-only",
+        action="store_true",
+        help="Only remove or report invalid logs (no segmentation performed)",
+    )
     return parser
 
 
@@ -148,6 +153,34 @@ def main():
 
     if not files:
         raise FileNotFoundError(f"No image files found in: {input_dir}")
+
+    if args.clean_logs_only:
+        print(f"Cleaning invalid logs in tree {args.tree} (no segmentation)...")
+        invalid_files = []
+        with tqdm(
+            total=len(files),
+            desc="Checking",
+            unit="slice",
+            dynamic_ncols=True,
+            file=sys.stdout,
+            disable=False,
+            ascii=True,
+        ) as progress:
+            for f_path in files:
+                try:
+                    img = iu.load_image(str(f_path))
+                    mask_dict = build_masks(img)
+                    if mask_dict is None:
+                        tqdm.write(f"[CLEAN] No log detected in {f_path}, removing.")
+                        f_path.unlink()
+                        invalid_files.append(f_path)
+                except Exception as exc:
+                    tqdm.write(f"[CLEAN] Failed to process {f_path}: {exc}, removing.")
+                    f_path.unlink()
+                    invalid_files.append(f_path)
+                progress.update(1)
+        print(f"Removed {len(invalid_files)} invalid log files.")
+        return
 
     if "all" in args.masks:
         requested_masks = set(MASK_NAMES)

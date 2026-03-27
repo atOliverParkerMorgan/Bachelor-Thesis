@@ -135,11 +135,7 @@ def list_series_dirs(root: Path) -> List[Path]:
 def list_candidate_roots(source_root: Path) -> List[Path]:
     project_root = Path(__file__).resolve().parents[3]
     raw_candidates = [
-        source_root,
-        source_root / "Dataset001",
-        project_root / "datasets",
-        project_root / "datasets" / "Dataset001",
-        project_root / "src" / "nn_UNet" / "datasets",
+        project_root / "src" / "nn_UNet" / "datasets"
     ]
 
     seen: set[Path] = set()
@@ -408,19 +404,19 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--source",
         type=Path,
-        default=Path("src/nn_UNet/datasets"),
-        help="Source root containing dub* folders (supports datasets/ or src/nn_UNet/datasets)",
+        default=Path("./src/nn_UNet/datasets"),
+        help="Source root containing dub* folders (supports datasets/ or datasets/Dataset001)",
     )
     parser.add_argument(
         "--nnunet-root",
-        type=Path,
-        default=Path("datasets/nnunet_data"),
+                type=Path,
+                default=Path("./src/nn_UNet/nnunet_data"),
         help="Root where nnUNet_raw/preprocessed/results folders are stored",
     )
     parser.add_argument(
         "--geometry-root",
         type=Path,
-        default=Path("src/png"),
+        default=Path("./src/png"),
         help="Path containing per-series geometry.json folders",
     )
     parser.add_argument("--dataset-id", type=int, default=1, help="nnU-Net dataset id")
