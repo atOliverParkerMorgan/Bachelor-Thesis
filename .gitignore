@@ -48,3 +48,5 @@ htmlcov/
 temp_*/
 *.nii *.nii.gz
 *.nii *.nii.gz
+
+src/cvat_exports/*

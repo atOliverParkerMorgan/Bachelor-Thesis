@@ -366,6 +366,11 @@ def detect_gpu_vram_gb() -> float | None:
 
 def prediction_worker_profile(vram_gb: float | None) -> tuple[int, int]:
     """Choose npp/nps to maximize speed while keeping VRAM usage reasonable."""
+    import os
+    # Force single-threaded IO on Windows to prevent multiprocessing WinError 5 Access Denied
+    if os.name == 'nt':
+        return 0, 0
+        
     if vram_gb is None:
         return 2, 2
     if vram_gb >= 16:
