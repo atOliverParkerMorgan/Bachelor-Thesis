@@ -1,0 +1,6 @@
+Job started at  Fri Mar 20 01:52:24 PM CET 2026
+Hostname:  cf-prod-node-031
+/var/spool/slurm/job00639/slurm_script: line 63: export: `BASH_FUNC_ml%%=() {  eval module': not a valid identifier
+/var/spool/slurm/job00639/slurm_script: line 63: export: `list
+}': not a valid identifier
+/var/spool/slurm/job00639/slurm_script: line 102: unexpected EOF while looking for matching `''

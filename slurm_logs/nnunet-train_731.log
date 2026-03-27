@@ -1,0 +1,102 @@
+Job started at  Sun Mar 22 11:34:01 PM CET 2026
+Hostname:  cf-prod-node-031
+[23:34:11] Running command: train
+$ nnUNetv2_train 1 3d_fullres 0 -p nnUNetResEncUNetLPlans
+Using device: cuda:0
+
+#######################################################################
+Please cite the following paper when using nnU-Net:
+Isensee, F., Jaeger, P. F., Kohl, S. A., Petersen, J., & Maier-Hein, K. H. (2021). nnU-Net: a self-configuring method for deep learning-based biomedical image segmentation. Nature methods, 18(2), 203-211.
+#######################################################################
+
+2026-03-22 23:34:21.321415: do_dummy_2d_data_aug: False
+2026-03-22 23:34:21.324988: Using splits from existing split file: /home/morgaoli/Bachelor-Thesis/datasets/nnunet_data/nnUNet_preprocessed/Dataset001_BPWoodDefects/splits_final.json
+2026-03-22 23:34:21.327717: The split file contains 5 splits.
+2026-03-22 23:34:21.329188: Desired fold for training: 0
+2026-03-22 23:34:21.330538: This split has 577 training and 145 validation cases.
+using pin_memory on device 0
+using pin_memory on device 0
+
+This is the configuration used by this training:
+Configuration name: 3d_fullres
+ {'data_identifier': 'nnUNetPlans_3d_fullres', 'preprocessor_name': 'DefaultPreprocessor', 'batch_size': 7, 'patch_size': [96, 256, 96], 'median_image_size_in_voxels': [96.0, 256.0, 96.0], 'spacing': [1.0, 1.0, 1.0], 'normalization_schemes': ['ZScoreNormalization'], 'use_mask_for_norm': [False], 'resampling_fn_data': 'resample_data_or_seg_to_shape', 'resampling_fn_seg': 'resample_data_or_seg_to_shape', 'resampling_fn_data_kwargs': {'is_seg': False, 'order': 3, 'order_z': 0, 'force_separate_z': None}, 'resampling_fn_seg_kwargs': {'is_seg': True, 'order': 1, 'order_z': 0, 'force_separate_z': None}, 'resampling_fn_probabilities': 'resample_data_or_seg_to_shape', 'resampling_fn_probabilities_kwargs': {'is_seg': False, 'order': 1, 'order_z': 0, 'force_separate_z': None}, 'architecture': {'network_class_name': 'dynamic_network_architectures.architectures.unet.ResidualEncoderUNet', 'arch_kwargs': {'n_stages': 6, 'features_per_stage': [32, 64, 128, 256, 320, 320], 'conv_op': 'torch.nn.modules.conv.Conv3d', 'kernel_sizes': [[3, 3, 3], [3, 3, 3], [3, 3, 3], [3, 3, 3], [3, 3, 3], [3, 3, 3]], 'strides': [[1, 1, 1], [2, 2, 2], [2, 2, 2], [2, 2, 2], [2, 2, 2], [1, 2, 1]], 'n_blocks_per_stage': [1, 3, 4, 6, 6, 6], 'n_conv_per_stage_decoder': [1, 1, 1, 1, 1], 'conv_bias': True, 'norm_op': 'torch.nn.modules.instancenorm.InstanceNorm3d', 'norm_op_kwargs': {'eps': 1e-05, 'affine': True}, 'dropout_op': None, 'dropout_op_kwargs': None, 'nonlin': 'torch.nn.LeakyReLU', 'nonlin_kwargs': {'inplace': True}}, '_kw_requires_import': ['conv_op', 'norm_op', 'dropout_op', 'nonlin']}, 'batch_dice': False} 
+
+These are the global plan.json settings:
+ {'dataset_name': 'Dataset001_BPWoodDefects', 'plans_name': 'nnUNetResEncUNetLPlans', 'original_median_spacing_after_transp': [1.0, 1.0, 1.0], 'original_median_shape_after_transp': [96, 256, 96], 'image_reader_writer': 'SimpleITKIO', 'transpose_forward': [0, 1, 2], 'transpose_backward': [0, 1, 2], 'experiment_planner_used': 'nnUNetPlannerResEncL', 'label_manager': 'LabelManager', 'foreground_intensity_properties_per_channel': {'0': {'max': 128.0, 'mean': 69.90880584716797, 'median': 75.0, 'min': 15.0, 'percentile_00_5': 15.0, 'percentile_99_5': 128.0, 'std': 33.33543395996094}}} 
+
+2026-03-22 23:34:25.604895: 
+2026-03-22 23:34:25.607035: Epoch 0
+2026-03-22 23:34:25.609248: Current learning rate: 0.01
+2026-03-22 23:38:52.677029: train_loss 0.1263
+2026-03-22 23:38:52.682112: val_loss -0.0307
+2026-03-22 23:38:52.684297: Pseudo dice [0.0, 0.0, 0.0, 0.215, 0.5492]
+2026-03-22 23:38:52.686213: Epoch time: 267.08 s
+2026-03-22 23:38:52.688112: Yayy! New best EMA pseudo Dice: 0.1529
+2026-03-22 23:38:56.180455: 
+2026-03-22 23:38:56.182849: Epoch 1
+2026-03-22 23:38:56.184488: Current learning rate: 0.00999
+2026-03-22 23:43:27.411134: train_loss -0.037
+2026-03-22 23:43:27.415413: val_loss -0.0852
+2026-03-22 23:43:27.417641: Pseudo dice [0.0, 0.0, 0.0, 0.3871, 0.7934]
+2026-03-22 23:43:27.420126: Epoch time: 271.23 s
+2026-03-22 23:43:27.422308: Yayy! New best EMA pseudo Dice: 0.1612
+2026-03-22 23:43:31.201824: 
+2026-03-22 23:43:31.204080: Epoch 2
+2026-03-22 23:43:31.205908: Current learning rate: 0.00998
+2026-03-22 23:47:40.927828: train_loss -0.0801
+2026-03-22 23:47:40.932713: val_loss -0.1277
+2026-03-22 23:47:40.934864: Pseudo dice [0.0, 0.0, 0.0, 0.5943, 0.8652]
+2026-03-22 23:47:40.936920: Epoch time: 249.73 s
+2026-03-22 23:47:40.939239: Yayy! New best EMA pseudo Dice: 0.1743
+2026-03-22 23:47:44.358862: 
+2026-03-22 23:47:44.361288: Epoch 3
+2026-03-22 23:47:44.363100: Current learning rate: 0.00997
+2026-03-22 23:51:58.652470: train_loss -0.1245
+2026-03-22 23:51:58.663615: val_loss -0.1632
+2026-03-22 23:51:58.667489: Pseudo dice [0.0, 0.0, 0.0539, 0.7762, 0.8943]
+2026-03-22 23:51:58.670839: Epoch time: 254.3 s
+2026-03-22 23:51:58.673849: Yayy! New best EMA pseudo Dice: 0.1913
+2026-03-22 23:52:05.829800: 
+2026-03-22 23:52:05.832848: Epoch 4
+2026-03-22 23:52:05.835720: Current learning rate: 0.00996
+2026-03-22 23:56:28.510183: train_loss -0.1554
+2026-03-22 23:56:28.522074: val_loss -0.173
+2026-03-22 23:56:28.524525: Pseudo dice [0.0, 0.2625, 0.2355, 0.6618, 0.9015]
+2026-03-22 23:56:28.527280: Epoch time: 262.68 s
+2026-03-22 23:56:28.530028: Yayy! New best EMA pseudo Dice: 0.2134
+2026-03-22 23:56:35.304543: 
+2026-03-22 23:56:35.307411: Epoch 5
+2026-03-22 23:56:35.309695: Current learning rate: 0.00995
+2026-03-23 00:01:23.336308: train_loss -0.1681
+2026-03-23 00:01:23.341118: val_loss -0.2086
+2026-03-23 00:01:23.342848: Pseudo dice [0.0, 0.7945, 0.3766, 0.8605, 0.9208]
+2026-03-23 00:01:23.344565: Epoch time: 288.04 s
+2026-03-23 00:01:23.346220: Yayy! New best EMA pseudo Dice: 0.2511
+2026-03-23 00:01:26.974054: 
+2026-03-23 00:01:26.976363: Epoch 6
+2026-03-23 00:01:26.978356: Current learning rate: 0.00995
+2026-03-23 00:05:27.263229: train_loss -0.1946
+2026-03-23 00:05:27.270003: val_loss -0.2319
+2026-03-23 00:05:27.272359: Pseudo dice [0.0, 0.7903, 0.3227, 0.8928, 0.9364]
+2026-03-23 00:05:27.274473: Epoch time: 240.29 s
+2026-03-23 00:05:27.276775: Yayy! New best EMA pseudo Dice: 0.2848
+2026-03-23 00:05:33.847495: 
+2026-03-23 00:05:33.850064: Epoch 7
+2026-03-23 00:05:33.852289: Current learning rate: 0.00994
+2026-03-23 00:09:51.619109: train_loss -0.2075
+2026-03-23 00:09:51.624030: val_loss -0.2344
+2026-03-23 00:09:51.626629: Pseudo dice [0.0, 0.8305, 0.3993, 0.8964, 0.932]
+2026-03-23 00:09:51.628813: Epoch time: 257.78 s
+2026-03-23 00:09:51.631004: Yayy! New best EMA pseudo Dice: 0.3175
+2026-03-23 00:09:55.793782: 
+2026-03-23 00:09:55.797329: Epoch 8
+2026-03-23 00:09:55.800152: Current learning rate: 0.00993
+2026-03-23 00:13:58.619055: train_loss -0.2134
+2026-03-23 00:13:58.623683: val_loss -0.2402
+2026-03-23 00:13:58.625492: Pseudo dice [0.0, 0.859, 0.3778, 0.9113, 0.9407]
+2026-03-23 00:13:58.627099: Epoch time: 242.83 s
+2026-03-23 00:13:58.628652: Yayy! New best EMA pseudo Dice: 0.3476
+2026-03-23 00:14:02.081578: 
+2026-03-23 00:14:02.083429: Epoch 9
+2026-03-23 00:14:02.085099: Current learning rate: 0.00992
+slurmstepd-cf-prod-node-031: error: *** JOB 731 ON cf-prod-node-031 CANCELLED AT 2026-03-23T00:16:54 ***

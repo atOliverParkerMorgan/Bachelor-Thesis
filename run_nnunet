@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [ $# -eq 0 ]; then
+    echo "Usage: $0 <prepare|plan|train|predict|predict-tree|all> [args...]"
+    exit 1
+fi
+
+START_TS=$(date +%s)
+echo "[run_nnunet] Starting: $*"
+
+poetry run python src/nn_UNet/pipeline.py "$@"
+
+END_TS=$(date +%s)
+ELAPSED=$((END_TS - START_TS))
+echo "[run_nnunet] Finished in ${ELAPSED}s"

@@ -1,0 +1,16 @@
+Job started at  Fri Mar 20 06:18:05 PM CET 2026
+Hostname:  cf-prod-node-031
+Using device: cuda:0
+
+#######################################################################
+Please cite the following paper when using nnU-Net:
+Isensee, F., Jaeger, P. F., Kohl, S. A., Petersen, J., & Maier-Hein, K. H. (2021). nnU-Net: a self-configuring method for deep learning-based biomedical image segmentation. Nature methods, 18(2), 203-211.
+#######################################################################
+
+2026-03-20 18:18:26.549130: Using torch.compile...
+2026-03-20 18:18:29.553415: do_dummy_2d_data_aug: False
+2026-03-20 18:18:29.556492: Creating new 5-fold cross-validation split...
+2026-03-20 18:18:29.565995: Desired fold for training: 0
+2026-03-20 18:18:29.567351: This split has 577 training and 145 validation cases.
+using pin_memory on device 0
+slurmstepd-cf-prod-node-031: error: *** JOB 646 ON cf-prod-node-031 CANCELLED AT 2026-03-20T23:36:55 ***

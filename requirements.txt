@@ -1,0 +1,35 @@
+# Core
+pydicom>=2.4,<3.0
+Pillow>=10.0,<11.0
+numpy==1.26.4
+SimpleITK>=2.3,<3.0
+improutils>=1.2.1,<2.0
+tqdm>=4.66,<5.0
+
+# Data / annotation
+pycocotools>=2.0.11,<3.0
+datumaro>=1.12.0,<2.0
+
+# Networking
+requests>=2.31,<3.0
+python-dotenv>=1.0,<2.0
+dotenv>=0.9.9,<1.0
+requests-toolbelt>=1.0.0,<2.0
+
+# CVAT
+cvat-sdk>=2.60.0,<3.0
+
+# Deep learning (LOCKED for nnU-Net compatibility)
+torch==2.6.0+cu124
+torchvision==0.21.0+cu124
+torchaudio==2.6.0+cu124
+
+# nnU-Net
+nnunetv2>=2.6.2,<3.0
+
+# Computer vision
+opencv-python==4.9.0.80
+opencv-contrib-python==4.9.0.80
+
+# Git dependency
+hiddenlayer @ git+https://github.com/FabianIsensee/hiddenlayer.git
