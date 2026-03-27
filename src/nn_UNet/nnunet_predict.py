@@ -131,24 +131,40 @@ def load_tree_geometry(tree_dir: Path) -> dict[str, object]:
         return json.load(file_handle)
 
 
-def write_tree_slices_nifti(tree_dir: Path, output_dir: Path) -> list[Path]:
-    """Write one NIfTI per PNG slice for memory-efficient 2D inference."""
+def write_tree_inference_nifti(tree_dir: Path, output_dir: Path, tree_name: str, is_3d: bool) -> list[Path]:
+    """Write NIfTI inputs based on model configuration (3D volume vs 2D slices)."""
     png_files = sorted_tree_slices(tree_dir)
     geometry = load_tree_geometry(tree_dir)
     _ensure_clean_dir(output_dir)
 
     spacing = geometry.get("spacing", [1.0, 1.0, 1.0])
-
     written: list[Path] = []
-    for png_file in png_files:
-        pixel_array = np.array(Image.open(png_file).convert("L"), dtype=np.uint8)
-        volume = pixel_array[np.newaxis, :, :]
+
+    if is_3d:
+        # Stack all PNGs into a single 3D volume (Z, Y, X)
+        slices = []
+        for png_file in png_files:
+            pixel_array = np.array(Image.open(png_file).convert("L"), dtype=np.uint8)
+            slices.append(pixel_array)
+        
+        volume = np.stack(slices, axis=0)
         itk_image = sitk.GetImageFromArray(volume)
         itk_image.SetSpacing(tuple(float(s) for s in spacing))
-
-        out_path = output_dir / f"{png_file.stem}_0000.nii.gz"
+        
+        out_path = output_dir / f"{tree_name}_0000.nii.gz"
         sitk.WriteImage(itk_image, str(out_path), useCompression=True)
         written.append(out_path)
+    else:
+        # Write individual 2D slices
+        for png_file in png_files:
+            pixel_array = np.array(Image.open(png_file).convert("L"), dtype=np.uint8)
+            volume = pixel_array[np.newaxis, :, :]
+            itk_image = sitk.GetImageFromArray(volume)
+            itk_image.SetSpacing(tuple(float(s) for s in spacing))
+
+            out_path = output_dir / f"{png_file.stem}_0000.nii.gz"
+            sitk.WriteImage(itk_image, str(out_path), useCompression=True)
+            written.append(out_path)
 
     return written
 
@@ -183,6 +199,8 @@ def export_prediction_masks(
     tree_dir: Path,
     segmentation_output_dir: Path,
     dataset_json_path: Path,
+    tree_name: str,
+    is_3d: bool = False
 ) -> dict[int, str]:
     label_map, ignored_labels = segmentation_style_label_map(dataset_json_path)
     if not label_map:
@@ -199,20 +217,40 @@ def export_prediction_masks(
         (masks_dir / folder_name).mkdir(parents=True, exist_ok=True)
 
     all_present_ids: set[int] = set()
-    for png_file in png_files:
-        pred_path = prediction_dir / f"{png_file.stem}.nii.gz"
+
+    if is_3d:
+        # Load the single 3D prediction block and slice it back up
+        pred_path = prediction_dir / f"{tree_name}.nii.gz"
         if not pred_path.exists():
-            raise FileNotFoundError(f"Missing prediction: {pred_path}")
+            raise FileNotFoundError(f"Missing 3D prediction: {pred_path}")
+        
+        pred_volume = sitk.GetArrayFromImage(sitk.ReadImage(str(pred_path)))
+        if pred_volume.shape[0] != len(png_files):
+            raise ValueError(f"3D prediction depth ({pred_volume.shape[0]}) does not match number of slices ({len(png_files)}).")
 
-        predicted_slice = sitk.GetArrayFromImage(sitk.ReadImage(str(pred_path))).squeeze()
-        if predicted_slice.ndim != 2:
-            raise ValueError(f"Expected 2D prediction for {png_file.stem}, got shape {predicted_slice.shape}")
+        for z, png_file in enumerate(png_files):
+            predicted_slice = pred_volume[z]
+            all_present_ids.update(int(v) for v in np.unique(predicted_slice).tolist())
+            shutil.copy2(png_file, images_dir / png_file.name)
+            for label_id, folder_name in label_map.items():
+                mask = np.where(predicted_slice == label_id, 255, 0).astype(np.uint8)
+                Image.fromarray(mask).save(masks_dir / folder_name / png_file.name)
+    else:
+        # Load individual 2D predictions
+        for png_file in png_files:
+            pred_path = prediction_dir / f"{png_file.stem}.nii.gz"
+            if not pred_path.exists():
+                raise FileNotFoundError(f"Missing prediction: {pred_path}")
 
-        all_present_ids.update(int(v) for v in np.unique(predicted_slice).tolist())
-        shutil.copy2(png_file, images_dir / png_file.name)
-        for label_id, folder_name in label_map.items():
-            mask = np.where(predicted_slice == label_id, 255, 0).astype(np.uint8)
-            Image.fromarray(mask).save(masks_dir / folder_name / png_file.name)
+            predicted_slice = sitk.GetArrayFromImage(sitk.ReadImage(str(pred_path))).squeeze()
+            if predicted_slice.ndim != 2:
+                raise ValueError(f"Expected 2D prediction for {png_file.stem}, got shape {predicted_slice.shape}")
+
+            all_present_ids.update(int(v) for v in np.unique(predicted_slice).tolist())
+            shutil.copy2(png_file, images_dir / png_file.name)
+            for label_id, folder_name in label_map.items():
+                mask = np.where(predicted_slice == label_id, 255, 0).astype(np.uint8)
+                Image.fromarray(mask).save(masks_dir / folder_name / png_file.name)
 
     ignored_present = {lid: name for lid, name in ignored_labels.items() if lid in all_present_ids}
     if ignored_present:

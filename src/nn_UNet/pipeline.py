@@ -378,7 +378,6 @@ def prediction_worker_profile(vram_gb: float | None) -> tuple[int, int]:
         return 2, 2
     return 1, 1
 
-
 def build_parser() -> argparse.ArgumentParser:
     _, add_clusterfit_arguments, _ = import_clusterfit_helpers()
 
@@ -471,7 +470,8 @@ def build_parser() -> argparse.ArgumentParser:
     predict_tree.add_argument("--organization", default=None, help="Optional CVAT organization slug override")
     predict_tree.add_argument("--keep-temp", action="store_true", help="Keep temporary NIfTI inputs and predictions")
     add_hidden_legacy_planner_args(predict_tree)
-
+    add_clusterfit_arguments(predict_tree) 
+    
     all_cmd = subparsers.add_parser("all", help="Prepare + plan + train")
     all_cmd.add_argument("--source", type=Path, default=Path("datasets"))
     all_cmd.add_argument("--geometry-root", type=Path, default=Path("src/png"))
@@ -508,7 +508,6 @@ def build_parser() -> argparse.ArgumentParser:
     add_clusterfit_arguments(all_cmd)
 
     return parser
-
 
 def run_prepare(args: argparse.Namespace) -> None:
     from src.preprocessing.conversion.segmentmask2nnunetformat import prepare_dataset
@@ -673,7 +672,7 @@ def run_predict_tree(args: argparse.Namespace, env: Dict[str, str]) -> None:
         export_prediction_masks,
         prepare_png_tree_from_ground_truth,
         upload_tree_datumaro,
-        write_tree_slices_nifti,
+        write_tree_inference_nifti,
     )
 
     tree_dir = prepare_png_tree_from_ground_truth(
@@ -694,7 +693,9 @@ def run_predict_tree(args: argparse.Namespace, env: Dict[str, str]) -> None:
             f"{dataset_json_path}. Run prepare first or point --nnunet-root to the prepared dataset."
         )
 
-    write_tree_slices_nifti(tree_dir, temp_case_dir)
+    # Determine if we are doing 3D Inference so we can prep the data properly
+    is_3d = "3d" in args.configuration.lower()
+    write_tree_inference_nifti(tree_dir, temp_case_dir, args.tree, is_3d)
 
     temp_prediction_dir.mkdir(parents=True, exist_ok=True)
     plans_identifier = resolve_plans_identifier(args)
@@ -740,6 +741,8 @@ def run_predict_tree(args: argparse.Namespace, env: Dict[str, str]) -> None:
         tree_dir=tree_dir,
         segmentation_output_dir=segmentation_output_dir,
         dataset_json_path=dataset_json_path,
+        tree_name=args.tree,
+        is_3d=is_3d,
     )
 
     should_export_datumaro = args.make_datumaro or args.upload_cvat

@@ -46,3 +46,5 @@ htmlcov/
 *.log
 *.tmp
 temp_*/
+*.nii *.nii.gz
+*.nii *.nii.gz

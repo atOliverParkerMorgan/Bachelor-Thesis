@@ -182,6 +182,18 @@ If training appears stuck before epoch logs on `3d_fullres`, use this safer comm
 	--output ./predictions \
 	--configuration 3d_fullres \
 	--fold 0
+
+# full pipeline to -datumaro	
+./run_nnunet predict-tree \
+    --clusterfit \
+    --slurm-partition gpu \
+    --slurm-gpu a100_40 \
+    --tree DUB_4 \
+    --ground-truth-root ./src/ground_truth \
+	--segmentation-output-root ./predictions \
+    --configuration 3d_fullres \
+    --fold 0 \
+    --make-datumaro	
 ```
 
 ## 7) Useful project files
