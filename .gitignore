@@ -50,3 +50,7 @@ temp_*/
 *.nii *.nii.gz
 
 src/cvat_exports/*
+src/nn_UNet/predictions/*
+src/nn_UNet/nnunet_data/nnUNet_preprocessed/*
+src/nn_UNet/nnunet_data/nnUNet_raw/*
+src/nn_UNet/nnunet_data/nnUNet_results/*

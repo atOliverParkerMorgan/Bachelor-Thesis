@@ -52,7 +52,7 @@ def process_tree(tree_name):
     zip_path = f"src/ground_truth/{tree_upper}.zip"
     extract_dir = f"src/ground_truth/{tree_upper}"
     cvat_masks_dir = f"src/cvat_exports/{tree_lower}/SegmentationClass"
-    nnunet_raw_dir = "src/Dataset001_BPWoodDefects/"
+    nnunet_raw_dir = "src/nn_UNet/nnunet_data/nnUNet_raw/Dataset001_BPWoodDefects/" 
     case_identifier = tree_lower 
 
     # 1. Extraction

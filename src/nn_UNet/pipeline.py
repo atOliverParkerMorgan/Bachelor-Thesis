@@ -43,17 +43,21 @@ CHECKPOINT_CANDIDATES = [
     "checkpoint_best.pth",
     "checkpoint_latest.pth",
 ]
-DEFAULT_NNUNET_ROOT = Path("./src/nn_UNet/nnunet_data")
-
+# Aligned to your newly established project root
+DEFAULT_NNUNET_ROOT = Path("src/nn_UNet/nnunet_data")
 
 def import_clusterfit_helpers():
-    from src.nn_UNet.clusterfit_utils import (
-        SlurmJobSubmitter,
-        add_clusterfit_arguments,
-        build_slurm_config_from_args,
-    )
-
-    return SlurmJobSubmitter, add_clusterfit_arguments, build_slurm_config_from_args
+    """Safely import cluster utilities, allowing local Windows runs without crashing."""
+    try:
+        from src.nn_UNet.clusterfit_utils import (
+            SlurmJobSubmitter,
+            add_clusterfit_arguments,
+            build_slurm_config_from_args,
+        )
+        return SlurmJobSubmitter, add_clusterfit_arguments, build_slurm_config_from_args
+    except ImportError:
+        def dummy_add(*args, **kwargs): pass
+        return None, dummy_add, None
 
 
 def log(message: str) -> None:
@@ -88,7 +92,6 @@ def ensure_env(nnunet_root: Path) -> Dict[str, str]:
 
 
 def apply_runtime_env_overrides(env: Dict[str, str], args: argparse.Namespace) -> None:
-    # Make training logs visible in Slurm output without long buffering delays.
     env["PYTHONUNBUFFERED"] = "1"
 
     save_every = getattr(args, "save_every", None)
@@ -104,7 +107,6 @@ def apply_runtime_env_overrides(env: Dict[str, str], args: argparse.Namespace) -
 
     compile_mode = getattr(args, "compile", None)
     if compile_mode == "off":
-        # nnU-Net v2 checks this env var to decide whether torch.compile is used.
         env["nnUNet_compile"] = "0"
     elif compile_mode == "on":
         env["nnUNet_compile"] = "1"
@@ -116,7 +118,6 @@ def apply_runtime_env_overrides(env: Dict[str, str], args: argparse.Namespace) -
     cpu_threads = getattr(args, "cpu_threads", None)
     if cpu_threads is not None:
         thread_count = str(cpu_threads)
-        # Avoid oversubscription in augmentation workers on shared cluster nodes.
         env["OMP_NUM_THREADS"] = thread_count
         env["MKL_NUM_THREADS"] = thread_count
         env["OPENBLAS_NUM_THREADS"] = thread_count
@@ -179,10 +180,7 @@ def resolve_plans_identifier(args: argparse.Namespace) -> str:
 
     if "nnUNetPlans" in available:
         if preferred != "nnUNetPlans":
-            log(
-                "Using detected legacy plans 'nnUNetPlans' because preferred "
-                f"'{preferred}' is missing."
-            )
+            log(f"Using detected legacy plans 'nnUNetPlans' because preferred '{preferred}' is missing.")
         return "nnUNetPlans"
 
     if available:
@@ -218,7 +216,6 @@ def ensure_crossval_splits(
     configuration: str,
     plans_identifier: str,
 ) -> None:
-    """Create splits_final.json for tiny datasets so nnU-Net does not force 5-fold CV."""
     dataset_dir = nnunet_root / "nnUNet_preprocessed" / f"Dataset{dataset_id:03d}_{dataset_name}"
     splits_file = dataset_dir / "splits_final.json"
     if splits_file.exists():
@@ -231,30 +228,15 @@ def ensure_crossval_splits(
             return
         config_dir = fallback_dir
 
-    case_ids = sorted(
-        {
-            path.stem
-            for path in config_dir.glob("*.b2nd")
-            if not path.stem.endswith("_seg")
-        }
-    )
+    case_ids = sorted({path.stem for path in config_dir.glob("*.b2nd") if not path.stem.endswith("_seg")})
     if not case_ids:
-        case_ids = sorted(
-            {
-                path.stem
-                for path in config_dir.glob("*.npz")
-                if not path.stem.endswith("_seg")
-            }
-        )
+        case_ids = sorted({path.stem for path in config_dir.glob("*.npz") if not path.stem.endswith("_seg")})
 
     num_cases = len(case_ids)
     if num_cases == 0 or num_cases >= 5:
         return
     if num_cases < 2:
-        raise RuntimeError(
-            "Training requires at least 2 cases. Found only "
-            f"{num_cases} case in {config_dir}."
-        )
+        raise RuntimeError(f"Training requires at least 2 cases. Found only {num_cases} case in {config_dir}.")
 
     splits = []
     for idx in range(num_cases):
@@ -347,11 +329,7 @@ def detect_gpu_vram_gb() -> float | None:
 
     try:
         output = subprocess.check_output(
-            [
-                "nvidia-smi",
-                "--query-gpu=memory.total",
-                "--format=csv,noheader,nounits",
-            ],
+            ["nvidia-smi", "--query-gpu=memory.total", "--format=csv,noheader,nounits"],
             text=True,
             timeout=3,
         )
@@ -367,7 +345,6 @@ def detect_gpu_vram_gb() -> float | None:
 def prediction_worker_profile(vram_gb: float | None) -> tuple[int, int]:
     """Choose npp/nps to maximize speed while keeping VRAM usage reasonable."""
     import os
-    # Force single-threaded IO on Windows to prevent multiprocessing WinError 5 Access Denied
     if os.name == 'nt':
         return 0, 0
         
@@ -387,8 +364,6 @@ def build_parser() -> argparse.ArgumentParser:
     _, add_clusterfit_arguments, _ = import_clusterfit_helpers()
 
     def add_hidden_legacy_planner_args(subparser: argparse.ArgumentParser) -> None:
-        # Keep backward compatibility for scripts that still pass these options,
-        # but remove them from normal help output to keep CLI lean.
         subparser.add_argument("--resenc-preset", choices=["M", "L", "XL"], default=None, help=argparse.SUPPRESS)
         subparser.add_argument("--planner", default=None, help=argparse.SUPPRESS)
 
@@ -399,9 +374,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    prep = subparsers.add_parser("prepare", help="Convert Dataset001 to nnU-Net raw format")
-    prep.add_argument("--source", type=Path, default=Path("datasets"))
-    prep.add_argument("--geometry-root", type=Path, default=Path("src/png"))
+    prep = subparsers.add_parser("prepare", help="Process ZIPs and CVAT masks into nnU-Net raw format")
+    prep.add_argument("--source", type=Path, default=Path("src/ground_truth"), help="Directory containing DICOM .zip files")
+    prep.add_argument("--cvat-exports", type=Path, default=Path("src/cvat_exports"), help="Directory containing CVAT exported folders")
     prep.add_argument("--overwrite", action="store_true")
     add_clusterfit_arguments(prep)
 
@@ -427,7 +402,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--compile",
         choices=["auto", "on", "off"],
         default="auto",
-        help="Control torch.compile usage (default: auto). Use 'off' if startup hangs before epoch 0.",
+        help="Control torch.compile usage (default: auto). Use 'off' if startup hangs.",
     )
     train.add_argument(
         "--n-proc-da",
@@ -457,29 +432,22 @@ def build_parser() -> argparse.ArgumentParser:
     predict.add_argument("--plans-identifier", default=None)
     add_clusterfit_arguments(predict)
 
-    predict_tree = subparsers.add_parser(
-        "predict-tree",
-        help="Predict one PNG tree, convert masks to Datumaro, and optionally upload to CVAT",
-    )
-    predict_tree.add_argument("--tree", required=True, help="Tree folder name under src/png, for example dub5")
-    predict_tree.add_argument("--input-root", type=Path, default=Path("src/png"))
+    # --- NEW: predict-tree command added here ---
+    predict_tree = subparsers.add_parser("predict-tree", help="Run whole-tree inference and export to Datumaro")
+    predict_tree.add_argument("--tree", required=True, help="Tree name (e.g., DUB_4)")
     predict_tree.add_argument("--ground-truth-root", type=Path, default=Path("src/ground_truth"))
-    predict_tree.add_argument("--segmentation-output-root", type=Path, default=Path("src/output"))
-    predict_tree.add_argument("--temp-root", type=Path, default=DEFAULT_NNUNET_ROOT / "tree_inference")
-    predict_tree.add_argument("--configuration", default="2d")
-    predict_tree.add_argument("--fold", default="0", help="Fold index or 'all'")
-    predict_tree.add_argument("--plans-identifier", default=None)
-    predict_tree.add_argument("--make-datumaro", action="store_true", help="Export the predicted masks to Datumaro zip")
-    predict_tree.add_argument("--datumaro-output", type=Path, default=None)
-    predict_tree.add_argument("--upload-cvat", action="store_true", help="Upload the Datumaro zip to CVAT after export")
-    predict_tree.add_argument("--organization", default=None, help="Optional CVAT organization slug override")
-    predict_tree.add_argument("--keep-temp", action="store_true", help="Keep temporary NIfTI inputs and predictions")
+    predict_tree.add_argument("--segmentation-output-root", type=Path, required=True)
+    predict_tree.add_argument("--configuration", default="3d_fullres")
+    predict_tree.add_argument("--fold", default="0", help="Fold index")
+    predict_tree.add_argument("--make-datumaro", action="store_true", help="Convert NIfTI outputs to Datumaro format")
     add_hidden_legacy_planner_args(predict_tree)
-    add_clusterfit_arguments(predict_tree) 
-    
+    predict_tree.add_argument("--plans-identifier", default=None)
+    add_clusterfit_arguments(predict_tree)
+    # --------------------------------------------
+
     all_cmd = subparsers.add_parser("all", help="Prepare + plan + train")
-    all_cmd.add_argument("--source", type=Path, default=Path("datasets"))
-    all_cmd.add_argument("--geometry-root", type=Path, default=Path("src/png"))
+    all_cmd.add_argument("--source", type=Path, default=Path("src/ground_truth"))
+    all_cmd.add_argument("--cvat-exports", type=Path, default=Path("src/cvat_exports"))
     all_cmd.add_argument("--overwrite", action="store_true")
     all_cmd.add_argument("--skip-prepare", action="store_true")
     add_hidden_legacy_planner_args(all_cmd)
@@ -489,24 +457,9 @@ def build_parser() -> argparse.ArgumentParser:
     all_cmd.add_argument("--save-every", type=int, default=10)
     all_cmd.add_argument("--skip-arch-plot", action="store_true")
     all_cmd.add_argument("--initial-lr", type=float, default=None)
-    all_cmd.add_argument(
-        "--compile",
-        choices=["auto", "on", "off"],
-        default="auto",
-        help="Control torch.compile usage for the train phase (default: auto).",
-    )
-    all_cmd.add_argument(
-        "--n-proc-da",
-        type=int,
-        default=4,
-        help="Number of nnU-Net data augmentation worker processes for training (default: 4).",
-    )
-    all_cmd.add_argument(
-        "--cpu-threads",
-        type=int,
-        default=1,
-        help="Threads per process for BLAS/OpenMP libs during training (default: 1).",
-    )
+    all_cmd.add_argument("--compile", choices=["auto", "on", "off"], default="auto")
+    all_cmd.add_argument("--n-proc-da", type=int, default=4)
+    all_cmd.add_argument("--cpu-threads", type=int, default=1)
     all_cmd.add_argument("--continue-training", action="store_true")
     all_cmd.add_argument("--plan-configurations", nargs="+", default=["3d_fullres"])
     all_cmd.add_argument("--plan-num-processes", type=int, default=1)
@@ -514,17 +467,20 @@ def build_parser() -> argparse.ArgumentParser:
 
     return parser
 
-def run_prepare(args: argparse.Namespace) -> None:
-    from src.preprocessing.conversion.segmentmask2nnunetformat import prepare_dataset
 
-    prepare_dataset(
-        source_root=args.source,
-        nnunet_root=args.nnunet_root,
-        geometry_root=args.geometry_root,
-        dataset_id=args.dataset_id,
-        dataset_name=args.dataset_name,
-        overwrite=args.overwrite,
-    )
+def run_prepare(args: argparse.Namespace) -> None:
+    """Uses the new segmask2ima pipeline to automatically process all logs in ground_truth."""
+    from src.preprocessing.conversion.segmask2ima import process_tree
+    
+    zip_files = list(args.source.glob("*.zip"))
+    if not zip_files:
+        log(f"No DICOM zip files found in {args.source}. Make sure your raw zips are there.")
+        return
+        
+    for zip_file in zip_files:
+        tree_name = zip_file.stem  # e.g., 'DUB_5' -> 'dub_5'
+        log(f"Auto-processing dataset for: {tree_name}")
+        process_tree(tree_name)
 
 
 def run_plan(args: argparse.Namespace, env: Dict[str, str]) -> None:
@@ -569,26 +525,22 @@ def convert_dicom_zip_to_nifti(zip_path: Path, output_dir: Path) -> None:
         with zipfile.ZipFile(zip_path) as archive:
             archive.extractall(temp_path)
 
-        # Find the nested directory containing the DICOM files
         dicom_files: List[Path] = []
         for ext in ("*.IMA", "*.dcm", "*.dicom"):
             dicom_files.extend(temp_path.rglob(ext))
         
         if not dicom_files:
-            # Fallback: grab files without extensions
             dicom_files.extend([p for p in temp_path.rglob("*") if p.is_file() and not p.suffix])
 
         if not dicom_files:
             raise FileNotFoundError(f"No DICOM/IMA files found in {zip_path}")
 
-        # Use the folder of the first found DICOM file as the series directory
         dicom_dir = dicom_files[0].parent
 
         reader = sitk.ImageSeriesReader()
         dicom_names = reader.GetGDCMSeriesFileNames(str(dicom_dir))
 
         if not dicom_names:
-            # Fallback if GDCM fails to auto-detect the series
             dicom_names = [str(p) for p in sorted(dicom_files)]
 
         reader.SetFileNames(dicom_names)
@@ -597,7 +549,6 @@ def convert_dicom_zip_to_nifti(zip_path: Path, output_dir: Path) -> None:
         except Exception as e:
             raise RuntimeError(f"Failed to read DICOM series from {zip_path}: {e}")
 
-        # nnU-Net requires _0000.nii.gz for the input channel
         out_name = f"{zip_path.stem}_0000.nii.gz"
         sitk.WriteImage(image, str(output_dir / out_name), useCompression=True)
         log(f"Successfully converted to {out_name}")
@@ -609,7 +560,6 @@ def run_predict(args: argparse.Namespace, env: Dict[str, str]) -> None:
     input_path = args.input
     temp_input_dir = None
 
-    # Auto-detect zip files and convert them to NIfTI
     if input_path.is_file() and input_path.suffix.lower() == ".zip":
         temp_input_dir = Path(tempfile.mkdtemp(prefix="nnunet_pred_in_"))
         convert_dicom_zip_to_nifti(input_path, temp_input_dir)
@@ -618,7 +568,6 @@ def run_predict(args: argparse.Namespace, env: Dict[str, str]) -> None:
         zip_files = list(input_path.glob("*.zip"))
         nii_files = list(input_path.glob("*_0000.nii.gz"))
         
-        # If there are zips but no NIfTIs, process the zips automatically
         if zip_files and not nii_files:
             temp_input_dir = Path(tempfile.mkdtemp(prefix="nnunet_pred_in_"))
             for zf in zip_files:
@@ -661,7 +610,6 @@ def run_predict(args: argparse.Namespace, env: Dict[str, str]) -> None:
     else:
         log(f"Fast predict profile: disable_tta, npp={npp}, nps={nps} (GPU VRAM unknown)")
     
-    # Use try-finally to guarantee cleanup of temporary NIfTIs
     try:
         run_cmd(cmd, env, "predict")
     finally:
@@ -670,138 +618,107 @@ def run_predict(args: argparse.Namespace, env: Dict[str, str]) -> None:
             log("Cleaned up temporary NIfTI inputs.")
 
 
+# --- NEW: Function to handle the full tree logic ---
 def run_predict_tree(args: argparse.Namespace, env: Dict[str, str]) -> None:
-    from src.nn_UNet.nnunet_predict import (
-        default_datumaro_output,
-        export_datumaro_for_tree,
-        export_prediction_masks,
+    from src.nn_UNet.tree_inference_helpers import (
         prepare_png_tree_from_ground_truth,
-        upload_tree_datumaro,
         write_tree_inference_nifti,
+        export_prediction_masks,
+        export_datumaro_for_tree,
+        default_datumaro_output
     )
 
-    tree_dir = prepare_png_tree_from_ground_truth(
-        tree_name=args.tree,
-        png_root=args.input_root,
-        ground_truth_root=args.ground_truth_root,
-        temp_root=args.temp_root,
-    )
+    tree_name = args.tree
+    dataset_json_path = args.nnunet_root / "nnUNet_raw" / f"Dataset{args.dataset_id:03d}_{args.dataset_name}" / "dataset.json"
 
-    temp_case_dir = args.temp_root / args.tree / "input"
-    temp_prediction_dir = args.temp_root / args.tree / "prediction"
-    segmentation_output_dir = args.segmentation_output_root / args.tree
-    dataset_json_path = prepared_dataset_root(args.nnunet_root, args.dataset_id, args.dataset_name) / "dataset.json"
+    # Create temporary directories for the conversion pipeline
+    temp_dir = Path(tempfile.mkdtemp(prefix=f"nnunet_tree_{tree_name}_"))
+    png_root = temp_dir / "pngs"
+    nifti_in_dir = temp_dir / "nifti_in"
+    nifti_out_dir = temp_dir / "nifti_out"
+    nifti_in_dir.mkdir(parents=True, exist_ok=True)
+    nifti_out_dir.mkdir(parents=True, exist_ok=True)
 
-    if not dataset_json_path.exists():
-        raise FileNotFoundError(
-            "dataset.json for label mapping was not found at "
-            f"{dataset_json_path}. Run prepare first or point --nnunet-root to the prepared dataset."
+    try:
+        log(f"Preparing PNGs for {tree_name}...")
+        tree_dir = prepare_png_tree_from_ground_truth(
+            tree_name=tree_name,
+            png_root=png_root,
+            ground_truth_root=args.ground_truth_root,
+            temp_root=temp_dir
         )
 
-    # Determine if we are doing 3D Inference so we can prep the data properly
-    is_3d = "3d" in args.configuration.lower()
-    write_tree_inference_nifti(tree_dir, temp_case_dir, args.tree, is_3d)
+        log("Converting slices to 3D NIfTI for nnU-Net inference...")
+        is_3d = "3d" in args.configuration.lower()
+        write_tree_inference_nifti(tree_dir, nifti_in_dir, tree_name, is_3d)
 
-    temp_prediction_dir.mkdir(parents=True, exist_ok=True)
-    plans_identifier = resolve_plans_identifier(args)
-    checkpoint_name = resolve_prediction_checkpoint(
-        nnunet_root=args.nnunet_root,
-        dataset_id=args.dataset_id,
-        dataset_name=args.dataset_name,
-        configuration=args.configuration,
-        plans_identifier=plans_identifier,
-        fold=str(args.fold),
-    )
-    cmd = [
-        "nnUNetv2_predict",
-        "-i",
-        str(temp_case_dir),
-        "-o",
-        str(temp_prediction_dir),
-        "-d",
-        str(args.dataset_id),
-        "-c",
-        args.configuration,
-        "-f",
-        str(args.fold),
-        "-p",
-        plans_identifier,
-    ]
-    if checkpoint_name is not None:
-        cmd.extend(["-chk", checkpoint_name])
-        log(f"Using prediction checkpoint: {checkpoint_name}")
+        # Build the standard nnUNet predict command
+        plans_identifier = resolve_plans_identifier(args)
+        checkpoint_name = resolve_prediction_checkpoint(
+            nnunet_root=args.nnunet_root, dataset_id=args.dataset_id,
+            dataset_name=args.dataset_name, configuration=args.configuration,
+            plans_identifier=plans_identifier, fold=str(args.fold)
+        )
 
-    cmd.append("--disable_tta")
-    vram_gb = detect_gpu_vram_gb()
-    npp, nps = prediction_worker_profile(vram_gb)
-    cmd.extend(["-npp", str(npp), "-nps", str(nps)])
-    if vram_gb is not None:
-        log(f"Fast predict-tree profile: disable_tta, npp={npp}, nps={nps} (GPU VRAM ~{vram_gb:.1f} GB)")
-    else:
-        log(f"Fast predict-tree profile: disable_tta, npp={npp}, nps={nps} (GPU VRAM unknown)")
-    run_cmd(cmd, env, "predict-tree")
+        cmd = [
+            "nnUNetv2_predict",
+            "-i", str(nifti_in_dir), "-o", str(nifti_out_dir),
+            "-d", str(args.dataset_id), "-c", args.configuration,
+            "-f", str(args.fold), "-p", plans_identifier,
+        ]
+        if checkpoint_name:
+            cmd.extend(["-chk", checkpoint_name])
 
-    export_prediction_masks(
-        prediction_dir=temp_prediction_dir,
-        tree_dir=tree_dir,
-        segmentation_output_dir=segmentation_output_dir,
-        dataset_json_path=dataset_json_path,
-        tree_name=args.tree,
-        is_3d=is_3d,
-    )
+        log("Running nnU-Net prediction...")
+        run_cmd(cmd, env, "predict-tree")
 
-    should_export_datumaro = args.make_datumaro or args.upload_cvat
-    datumaro_zip = args.datumaro_output or default_datumaro_output(segmentation_output_dir, args.tree)
-    if should_export_datumaro:
-        export_datumaro_for_tree(segmentation_output_dir, datumaro_zip, args.tree)
-    if args.upload_cvat:
-        upload_tree_datumaro(datumaro_zip, organization=args.organization)
+        # Datumaro Export Phase
+        if args.make_datumaro:
+            log("Slicing NIfTI into PNG masks and formatting for Datumaro...")
+            export_prediction_masks(
+                prediction_dir=nifti_out_dir,
+                tree_dir=tree_dir,
+                segmentation_output_dir=args.segmentation_output_root,
+                dataset_json_path=dataset_json_path,
+                tree_name=tree_name,
+                is_3d=is_3d
+            )
+            datumaro_zip = default_datumaro_output(args.segmentation_output_root, tree_name)
+            export_datumaro_for_tree(args.segmentation_output_root, datumaro_zip, tree_name)
+            log(f"Success! Datumaro dataset zipped at: {datumaro_zip}")
+        else:
+            shutil.copytree(nifti_out_dir, args.segmentation_output_root, dirs_exist_ok=True)
+            log(f"Saved standard NIfTI predictions to {args.segmentation_output_root}")
 
-    if not args.keep_temp and args.temp_root.exists():
-        shutil.rmtree(args.temp_root / args.tree, ignore_errors=True)
-
+    finally:
+        shutil.rmtree(temp_dir, ignore_errors=True)
+        log("Cleaned up temporary prediction files.")
+# ---------------------------------------------------
 
 def submit_to_clusterfit(args: argparse.Namespace, env: Dict[str, str]) -> None:
-    """Submit current command to ClusterFIT via Slurm instead of running locally."""
     SlurmJobSubmitter, _, build_slurm_config_from_args = import_clusterfit_helpers()
+    
+    if SlurmJobSubmitter is None:
+        raise RuntimeError("ClusterFIT utilities are missing. Cannot submit to Slurm from this environment.")
 
-    # Keep the generated script robust by exporting only the env vars required at runtime.
     slurm_env: Dict[str, str] = {}
     for key in (
-        "PATH",
-        "HOME",
-        "LANG",
-        "LC_ALL",
-        "LD_LIBRARY_PATH",
-        "VIRTUAL_ENV",
-        "PYTHONPATH",
-        "PYTHONUNBUFFERED",
-        "nnUNet_raw",
-        "nnUNet_preprocessed",
-        "nnUNet_results",
-        "NNUNET_SAVE_EVERY",
-        "NNUNET_INITIAL_LR",
-        "NNUNET_SKIP_ARCH_PLOT",
-        "nnUNet_compile",
-        "nnUNet_n_proc_DA",
-        "OMP_NUM_THREADS",
-        "MKL_NUM_THREADS",
-        "OPENBLAS_NUM_THREADS",
-        "NUMEXPR_NUM_THREADS",
+        "PATH", "HOME", "LANG", "LC_ALL", "LD_LIBRARY_PATH", "VIRTUAL_ENV", 
+        "PYTHONPATH", "PYTHONUNBUFFERED", "nnUNet_raw", "nnUNet_preprocessed", 
+        "nnUNet_results", "NNUNET_SAVE_EVERY", "NNUNET_INITIAL_LR", 
+        "NNUNET_SKIP_ARCH_PLOT", "nnUNet_compile", "nnUNet_n_proc_DA", 
+        "OMP_NUM_THREADS", "MKL_NUM_THREADS", "OPENBLAS_NUM_THREADS", "NUMEXPR_NUM_THREADS",
     ):
         value = env.get(key)
         if value:
             slurm_env[key] = value
 
-    # Build Slurm configuration
     slurm_config = build_slurm_config_from_args(args, args.command)
     
-    # Instead of manually mapping argparse to lists, safely pass through the original command.
     original_args = sys.argv[1:]
     safe_args = [arg for arg in original_args if arg != "--clusterfit"]
     cmd = [sys.executable, str(Path(__file__).resolve())] + safe_args
 
-    # Build Slurm script
     script_content = SlurmJobSubmitter.build_slurm_script(
         job_command=cmd,
         slurm_config=slurm_config,
@@ -809,7 +726,6 @@ def submit_to_clusterfit(args: argparse.Namespace, env: Dict[str, str]) -> None:
         modules_load=["cray-ccdb", "cray-mvapich2_pmix_nogpu"] if getattr(args, "arm_hpe_cpe", False) else None,
     )
     
-    # Write script to temporary file
     with tempfile.NamedTemporaryFile(mode="w", suffix=".sh", delete=False) as f:
         f.write(script_content)
         script_path = Path(f.name)
@@ -819,10 +735,8 @@ def submit_to_clusterfit(args: argparse.Namespace, env: Dict[str, str]) -> None:
     if slurm_config.gres:
         log(f"GPU: {slurm_config.gres}")
     
-    # Make script executable
     script_path.chmod(0o755)
     
-    # Submit job
     try:
         job_id = SlurmJobSubmitter.submit_job(
             script_path,
@@ -836,7 +750,6 @@ def submit_to_clusterfit(args: argparse.Namespace, env: Dict[str, str]) -> None:
         else:
             log("Job submission completed")
     finally:
-        # Keep script for reference if requested or it's still needed
         if not args.slurm_dry_run:
             log(f"Slurm script saved at: {script_path}")
 
@@ -850,7 +763,6 @@ def main() -> None:
     started = time.perf_counter()
     log(f"Running command: {args.command}")
     
-    # Check if ClusterFIT submission is requested
     if getattr(args, "clusterfit", False):
         log("Submitting to ClusterFIT...")
         submit_to_clusterfit(args, env)
@@ -862,8 +774,7 @@ def main() -> None:
             if not has_prepared_dataset(args.nnunet_root, args.dataset_id, args.dataset_name):
                 dataset_root = prepared_dataset_root(args.nnunet_root, args.dataset_id, args.dataset_name)
                 raise RuntimeError(
-                    "--skip-prepare was set, but prepared dataset is missing or incomplete at "
-                    f"{dataset_root}."
+                    f"--skip-prepare was set, but prepared dataset is missing or incomplete at {dataset_root}."
                 )
             log("Skipping prepare step (reusing existing prepared dataset).")
         else:
@@ -877,8 +788,11 @@ def main() -> None:
 
     if args.command == "predict":
         run_predict(args, env)
+
+    # --- NEW: predict-tree trigger ---
     if args.command == "predict-tree":
         run_predict_tree(args, env)
+    # ---------------------------------
 
     log(f"Done in {int(time.perf_counter() - started)}s")
 

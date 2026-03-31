@@ -1,4 +1,0 @@
-Job started at  Sat Mar 21 02:47:43 PM CET 2026
-Hostname:  cf-prod-node-011
-[14:47:58] Running command: prepare
-slurmstepd-cf-prod-node-011: error: *** JOB 681 ON cf-prod-node-011 CANCELLED AT 2026-03-21T14:49:11 ***
