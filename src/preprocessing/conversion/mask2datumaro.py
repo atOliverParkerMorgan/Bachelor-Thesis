@@ -1,227 +1,147 @@
+#!/usr/bin/env python3
+"""Run only the NIfTI to Datumaro conversion for an existing prediction."""
+
 import argparse
 import logging
 import shutil
-from pathlib import Path
-import cv2
-import numpy as np
+import tempfile
 from tqdm import tqdm
+import sys
+from pathlib import Path
 
-# Official Datumaro API imports
-from datumaro.components.dataset import Dataset
-from datumaro.components.dataset_base import DatasetItem
-from datumaro.components.annotation import Mask, LabelCategories, AnnotationType
-from datumaro.components.media import Image
+PROJECT_ROOT = Path(__file__).resolve().parents[3] 
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+# Import your newly fixed helper functions
+from src.nn_UNet.tree_inference_helpers import (
+    prepare_png_tree_from_ground_truth,
+    export_prediction_masks,
+    export_datumaro_for_tree,
+    default_datumaro_output
+)
 
+def repack_tree(
+    tree_name: str,
+    ground_truth_root: Path,
+    prediction_dir: Path,
+    dataset_json_path: Path,
+    output_root: Path,
+) -> Path | None:
+    """Core logic to repack a NIfTI prediction into a Datumaro dataset."""
+    logger = logging.getLogger(__name__)
 
-DEFAULT_FOLDER_TO_ID = {"pozadi": 0, "suk": 1, "hniloba": 2, "kura": 3, "trhlina": 4}
-DEFAULT_LABEL_NAMES = ["Pozadi", "Suk", "Hniloba", "Kura", "Trhlina"]
+    prediction_nifti = prediction_dir / f"{tree_name}.nii.gz"
+    if not prediction_nifti.exists():
+        logger.error(f"Could not find predicted NIfTI file: {prediction_nifti}")
+        return None
 
-
-class DatasetItemsIterable:
-    def __init__(self, mask_files, ref_dir, images_dir, masks_dir, folder_to_id, subset, item_id_mode):
-        self.mask_files = mask_files
-        self.ref_dir = ref_dir
-        self.images_dir = images_dir
-        self.masks_dir = masks_dir
-        self.folder_to_id = folder_to_id
-        self.subset = subset
-        self.item_id_mode = item_id_mode
-
-    def __iter__(self):
-        return iter_dataset_items(
-            mask_files=self.mask_files,
-            ref_dir=self.ref_dir,
-            images_dir=self.images_dir,
-            masks_dir=self.masks_dir,
-            folder_to_id=self.folder_to_id,
-            subset=self.subset,
-            item_id_mode=self.item_id_mode,
-        )
-
-
-def _build_item_id(rel_path: Path, mode: str) -> str:
-    if mode == "stem":
-        return rel_path.stem
-    if mode == "name":
-        return rel_path.name
-    if mode == "relative_stem":
-        return rel_path.with_suffix("").as_posix()
-    if mode == "relative_name":
-        return rel_path.as_posix()
-    raise ValueError(f"Unsupported item id mode: {mode}")
-
-
-def iter_dataset_items(mask_files, ref_dir, images_dir, masks_dir, folder_to_id, subset, item_id_mode):
-    for bg_mask_path in tqdm(mask_files, desc="Building Dataset"):
-        rel_path = bg_mask_path.relative_to(ref_dir)
-        item_id = _build_item_id(rel_path, item_id_mode)
-
-        image_path = None
-        for ext in [".png", ".jpg", ".jpeg", ".tif", ".bmp"]:
-            candidate = images_dir / rel_path.with_suffix(ext)
-            if candidate.exists():
-                image_path = candidate
-                break
-
-        if image_path is None:
-            continue
-
-        item_annotations = []
-
-        for folder, label_id in folder_to_id.items():
-            mask_file = masks_dir / folder / rel_path
-            if not mask_file.exists():
-                continue
-
-            mask_img = cv2.imread(str(mask_file), cv2.IMREAD_GRAYSCALE)
-            if mask_img is None or not np.any(mask_img > 0):
-                continue
-
-            mask_img = (
-                (mask_img > 127).astype(np.uint8) if mask_img.max() > 1 else mask_img
-            )
-
-            num_labels, labels_im = cv2.connectedComponents(mask_img)
-
-            for component_id in range(1, num_labels):
-                instance_mask = (labels_im == component_id).astype(np.uint8)
-                item_annotations.append(
-                    Mask(
-                        image=instance_mask,
-                        label=label_id,
-                        group=component_id,
-                        z_order=len(item_annotations),
-                    )
-                )
-
-        yield DatasetItem(
-            id=item_id,
-            subset=subset,
-            media=Image.from_file(path=str(image_path)),
-            annotations=item_annotations,
-        )
-
-
-def export_datumaro_dataset(
-    segmentation_output: Path,
-    output: Path,
-    task_name: str,
-    label_names: list[str] | None = None,
-    folder_to_id: dict[str, int] | None = None,
-    save_media: bool = True,
-    item_id_mode: str = "stem",
-) -> Path:
-    label_names = label_names or DEFAULT_LABEL_NAMES
-    folder_to_id = folder_to_id or DEFAULT_FOLDER_TO_ID
-
-    label_cat = LabelCategories()
-    for label_name in label_names:
-        label_cat.add(label_name)
-
-    categories = {AnnotationType.label: label_cat}
-    masks_dir = segmentation_output / "masks"
-    images_dir = segmentation_output / "images"
-
-    if not masks_dir.exists():
-        raise FileNotFoundError(f"Missing masks directory: {masks_dir}")
-    if not images_dir.exists():
-        raise FileNotFoundError(f"Missing images directory: {images_dir}")
-
-    available_masks = [folder for folder in folder_to_id if (masks_dir / folder).exists()]
-    if not available_masks:
-        raise FileNotFoundError(f"No mask folders found in {masks_dir}")
-
-    print(f"Found mask types: {', '.join(available_masks)}")
-    ref_dir = masks_dir / available_masks[0]
-    mask_files = sorted(ref_dir.glob("*.png"))
-    if not mask_files:
-        mask_files = sorted(ref_dir.rglob("*.png"))
-
-    print(f"Processing {len(mask_files)} images...")
-
-    dataset = Dataset.from_iterable(
-        DatasetItemsIterable(
-            mask_files=mask_files,
-            ref_dir=ref_dir,
-            images_dir=images_dir,
-            masks_dir=masks_dir,
-            folder_to_id=folder_to_id,
-            subset=task_name,
-            item_id_mode=item_id_mode,
-        ),
-        categories=categories,
-    )
-
-    print("Exporting dataset to Datumaro format...")
-    temp_dir = output.parent / "temp_datumaro_lib_export"
-    if temp_dir.exists():
-        shutil.rmtree(temp_dir)
+    # Create a temporary directory to rebuild the PNGs
+    temp_dir = Path(tempfile.mkdtemp(prefix=f"nnunet_repack_{tree_name}_"))
+    png_root = temp_dir / "pngs"
 
     try:
-        dataset.export(save_dir=str(temp_dir), format="datumaro", save_media=save_media)
-        output_base = str(output).replace(".zip", "")
-        shutil.make_archive(output_base, "zip", root_dir=temp_dir)
-        print(f"Created Datumaro dataset at: {output}")
-        return output
+        logger.info(f"Re-extracting PNGs from ground truth zip for {tree_name}...")
+        tree_dir = prepare_png_tree_from_ground_truth(
+            tree_name=tree_name,
+            png_root=png_root,
+            ground_truth_root=ground_truth_root,
+            temp_root=temp_dir
+        )
+
+        logger.info(f"Slicing NIfTI and mapping labels to {output_root}...")
+        # export_prediction_masks will handle the heavy lifting (and the fixed label map)
+        export_prediction_masks(
+            prediction_dir=prediction_dir,
+            tree_dir=tree_dir,
+            segmentation_output_dir=output_root,
+            dataset_json_path=dataset_json_path,
+            tree_name=tree_name,
+            is_3d=True
+        )
+
+        logger.info("Zipping raw masks into Datumaro format...")
+        datumaro_zip = default_datumaro_output(output_root, tree_name)
+        export_datumaro_for_tree(output_root, datumaro_zip, tree_name)
+        
+        return datumaro_zip
+
     finally:
-        if temp_dir.exists():
-            shutil.rmtree(temp_dir)
+        shutil.rmtree(temp_dir, ignore_errors=True)
+        logger.debug(f"Cleaned up temporary staging directory: {temp_dir}")
 
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Convert masks to Datumaro format using the official library."
+        description="Repack an existing nnU-Net NIfTI prediction into a Datumaro dataset."
     )
     parser.add_argument(
-        "--segmentation-output",
-        "-s",
+        "--tree",
+        "-t",
+        type=str,
+        default="DUB_4",
+        help="Name of the tree to process (e.g., 'DUB_4').",
+    )
+    parser.add_argument(
+        "--ground-truth",
+        "-g",
         type=Path,
-        required=True,
-        help="Path to the segmentation output (containing 'masks' and 'images' folders)",
+        default=Path("src/ground_truth"),
+        help="Path to the ground truth directory containing the raw zip files.",
     )
     parser.add_argument(
-        "--output",
+        "--prediction-dir",
+        "-p",
+        type=Path,
+        default=Path("src/nn_UNet/predictions"),
+        help="Path where the existing predicted .nii.gz file is located.",
+    )
+    parser.add_argument(
+        "--dataset-json",
+        "-j",
+        type=Path,
+        default=Path("src/nn_UNet/nnunet_data/nnUNet_raw/Dataset001_BPWoodDefects/dataset.json"),
+        help="Path to the nnU-Net dataset.json for label mapping.",
+    )
+    parser.add_argument(
+        "--output-dir",
         "-o",
         type=Path,
-        required=True,
-        help="Path to save the final .zip file",
+        default=Path("src/nn_UNet/predictions_fixed"),
+        help="Path to save the generated PNG masks and images.",
     )
     parser.add_argument(
-        "--task-name",
-        "-n",
-        type=str,
-        required=True,
-        help="Name of the subset (e.g. 'dub1')",
-    )
-    parser.add_argument(
-        "--label-names",
-        nargs=5,
-        default=DEFAULT_LABEL_NAMES,
-        help="Labels for Background, Knot, Decay, Bark, Crack",
-    )
-    parser.add_argument(
-        "--no-media",
+        "--verbose",
+        "-v",
         action="store_true",
-        help="Export annotations only (no image media inside Datumaro zip)",
-    )
-    parser.add_argument(
-        "--item-id-mode",
-        choices=["stem", "name", "relative_stem", "relative_name"],
-        default="stem",
-        help="How to build Datumaro item ids for CVAT frame matching",
+        help="Enable debug logging.",
     )
 
     args = parser.parse_args()
-    logging.basicConfig(level=logging.INFO)
 
-    export_datumaro_dataset(
-        segmentation_output=args.segmentation_output,
-        output=args.output,
-        task_name=args.task_name,
-        label_names=args.label_names,
-        save_media=not args.no_media,
-        item_id_mode=args.item_id_mode,
+    # Setup styling for the logger
+    log_level = logging.DEBUG if args.verbose else logging.INFO
+    logging.basicConfig(
+        level=log_level,
+        format="%(asctime)s [%(levelname)s] %(message)s",
+        datefmt="%H:%M:%S"
     )
+    logger = logging.getLogger(__name__)
+
+    logger.info(f"Starting Datumaro repack process for {args.tree}")
+    
+    datumaro_zip = repack_tree(
+        tree_name=args.tree,
+        ground_truth_root=args.ground_truth,
+        prediction_dir=args.prediction_dir,
+        dataset_json_path=args.dataset_json,
+        output_root=args.output_dir,
+    )
+
+    if datumaro_zip and datumaro_zip.exists():
+        logger.info(f"Success! Datumaro dataset zipped at: {datumaro_zip}")
+        logger.info(f"Raw image/mask folders are located at: {args.output_dir}")
+    else:
+        logger.error("Failed to create the Datumaro dataset.")
 
 
 if __name__ == "__main__":

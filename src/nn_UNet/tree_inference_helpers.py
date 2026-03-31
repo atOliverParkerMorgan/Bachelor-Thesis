@@ -13,7 +13,6 @@ import SimpleITK as sitk
 from PIL import Image
 
 from src.preprocessing.conversion.ima2png import process_series
-from src.preprocessing.conversion.mask2datumaro import export_datumaro_dataset
 from src.preprocessing.utils.upload_to_cvat import upload_specific_file
 
 SEGMENTATION_STYLE_LABELS = {
@@ -179,7 +178,7 @@ def segmentation_style_label_map(dataset_json_path: Path) -> tuple[dict[int, str
     ignored: dict[int, str] = {}
 
     for label_id, label_name in dataset_labels.items():
-        folder_name = SEGMENTATION_STYLE_LABELS.get(label_name)
+        folder_name = SEGMENTATION_STYLE_LABELS.get(label_name.lower())       
         if folder_name is None:
             ignored[label_id] = label_name
             continue
@@ -263,8 +262,9 @@ def export_prediction_masks(
 def default_datumaro_output(segmentation_root: Path, tree_name: str) -> Path:
     return segmentation_root.parent / f"datumaro_{tree_name}.zip"
 
-
 def export_datumaro_for_tree(segmentation_output_dir: Path, datumaro_zip: Path, tree_name: str) -> Path:
+    from src.preprocessing.conversion.mask2datumaro import export_datumaro_dataset
+    
     return export_datumaro_dataset(
         segmentation_output=segmentation_output_dir,
         output=datumaro_zip,
