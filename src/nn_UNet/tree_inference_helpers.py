@@ -7,6 +7,7 @@ import json
 import shutil
 import zipfile
 from pathlib import Path
+from typing import Iterable
 
 import numpy as np
 import SimpleITK as sitk
@@ -17,11 +18,14 @@ from src.preprocessing.utils.upload_to_cvat import upload_specific_file
 
 SEGMENTATION_STYLE_LABELS = {
     "background": "pozadi",
+    "pozadi": "pozadi",
     "hniloba": "hniloba",
     "kura": "kura",
     "suk": "suk",
     "trhlina": "trhlina",
+    "poskozeni_hmyzem": "poskozeni_hmyzem",
 }
+BACKGROUND_LABEL_ALIASES = {"background", "pozadi"}
 
 
 def sorted_tree_slices(tree_dir: Path) -> list[Path]:
@@ -130,6 +134,29 @@ def load_tree_geometry(tree_dir: Path) -> dict[str, object]:
         return json.load(file_handle)
 
 
+def _dataset_labels_by_id(dataset_json_path: Path) -> dict[int, str]:
+    with dataset_json_path.open("r", encoding="utf-8") as file_handle:
+        dataset_json = json.load(file_handle)
+
+    labels = dataset_json.get("labels", {})
+    labels_by_id: dict[int, str] = {}
+
+    # Accept both nnU-Net style {"name": id} and {id: "name"} maps.
+    for key, value in labels.items():
+        if isinstance(value, (int, str)):
+            try:
+                labels_by_id[int(value)] = str(key)
+                continue
+            except (TypeError, ValueError):
+                pass
+        try:
+            labels_by_id[int(key)] = str(value)
+        except (TypeError, ValueError):
+            continue
+
+    return labels_by_id
+
+
 def write_tree_inference_nifti(tree_dir: Path, output_dir: Path, tree_name: str, is_3d: bool) -> list[Path]:
     """Write NIfTI inputs based on model configuration (3D volume vs 2D slices)."""
     png_files = sorted_tree_slices(tree_dir)
@@ -143,7 +170,8 @@ def write_tree_inference_nifti(tree_dir: Path, output_dir: Path, tree_name: str,
         # Stack all PNGs into a single 3D volume (Z, Y, X)
         slices = []
         for png_file in png_files:
-            pixel_array = np.array(Image.open(png_file).convert("L"), dtype=np.uint8)
+            with Image.open(png_file) as image:
+                pixel_array = np.array(image.convert("L"), dtype=np.uint8)
             slices.append(pixel_array)
         
         volume = np.stack(slices, axis=0)
@@ -156,7 +184,8 @@ def write_tree_inference_nifti(tree_dir: Path, output_dir: Path, tree_name: str,
     else:
         # Write individual 2D slices
         for png_file in png_files:
-            pixel_array = np.array(Image.open(png_file).convert("L"), dtype=np.uint8)
+            with Image.open(png_file) as image:
+                pixel_array = np.array(image.convert("L"), dtype=np.uint8)
             volume = pixel_array[np.newaxis, :, :]
             itk_image = sitk.GetImageFromArray(volume)
             itk_image.SetSpacing(tuple(float(s) for s in spacing))
@@ -169,10 +198,7 @@ def write_tree_inference_nifti(tree_dir: Path, output_dir: Path, tree_name: str,
 
 
 def segmentation_style_label_map(dataset_json_path: Path) -> tuple[dict[int, str], dict[int, str]]:
-    with dataset_json_path.open("r", encoding="utf-8") as file_handle:
-        dataset_json = json.load(file_handle)
-    labels = dataset_json.get("labels", {})
-    dataset_labels = {int(label_id): label_name for label_name, label_id in labels.items()}
+    dataset_labels = _dataset_labels_by_id(dataset_json_path)
 
     supported: dict[int, str] = {}
     ignored: dict[int, str] = {}
@@ -185,6 +211,34 @@ def segmentation_style_label_map(dataset_json_path: Path) -> tuple[dict[int, str
         supported[label_id] = folder_name
 
     return supported, ignored
+
+
+def _resolve_background_label_ids(dataset_json_path: Path) -> set[int]:
+    dataset_labels = _dataset_labels_by_id(dataset_json_path)
+    return {
+        label_id
+        for label_id, label_name in dataset_labels.items()
+        if label_name.lower() in BACKGROUND_LABEL_ALIASES
+    }
+
+
+def _extract_prediction_slice(prediction_image: sitk.Image) -> np.ndarray:
+    predicted_slice = sitk.GetArrayFromImage(prediction_image).squeeze()
+    if predicted_slice.ndim != 2:
+        raise ValueError(f"Expected 2D prediction slice, got shape {predicted_slice.shape}")
+    return predicted_slice
+
+
+def _slice_has_log(predicted_slice: np.ndarray, background_ids: Iterable[int]) -> bool:
+    background_ids = set(background_ids)
+    if not background_ids:
+        # Fallback when dataset has no explicit background class.
+        return bool(np.any(predicted_slice > 0))
+
+    log_mask = np.ones(predicted_slice.shape, dtype=bool)
+    for background_id in background_ids:
+        log_mask &= predicted_slice != background_id
+    return bool(np.any(log_mask))
 
 
 def _ensure_clean_dir(path: Path) -> None:
@@ -204,6 +258,7 @@ def export_prediction_masks(
     label_map, ignored_labels = segmentation_style_label_map(dataset_json_path)
     if not label_map:
         raise RuntimeError("No supported segmentation-style labels were found in dataset.json")
+    background_ids = _resolve_background_label_ids(dataset_json_path)
 
     png_files = sorted_tree_slices(tree_dir)
 
@@ -216,6 +271,7 @@ def export_prediction_masks(
         (masks_dir / folder_name).mkdir(parents=True, exist_ok=True)
 
     all_present_ids: set[int] = set()
+    exported_slices = 0
 
     if is_3d:
         # Load the single 3D prediction block and slice it back up
@@ -229,11 +285,15 @@ def export_prediction_masks(
 
         for z, png_file in enumerate(png_files):
             predicted_slice = pred_volume[z]
+            if not _slice_has_log(predicted_slice, background_ids):
+                continue
+
             all_present_ids.update(int(v) for v in np.unique(predicted_slice).tolist())
             shutil.copy2(png_file, images_dir / png_file.name)
             for label_id, folder_name in label_map.items():
                 mask = np.where(predicted_slice == label_id, 255, 0).astype(np.uint8)
                 Image.fromarray(mask).save(masks_dir / folder_name / png_file.name)
+            exported_slices += 1
     else:
         # Load individual 2D predictions
         for png_file in png_files:
@@ -241,26 +301,35 @@ def export_prediction_masks(
             if not pred_path.exists():
                 raise FileNotFoundError(f"Missing prediction: {pred_path}")
 
-            predicted_slice = sitk.GetArrayFromImage(sitk.ReadImage(str(pred_path))).squeeze()
-            if predicted_slice.ndim != 2:
-                raise ValueError(f"Expected 2D prediction for {png_file.stem}, got shape {predicted_slice.shape}")
+            predicted_slice = _extract_prediction_slice(sitk.ReadImage(str(pred_path)))
+            if not _slice_has_log(predicted_slice, background_ids):
+                continue
 
             all_present_ids.update(int(v) for v in np.unique(predicted_slice).tolist())
             shutil.copy2(png_file, images_dir / png_file.name)
             for label_id, folder_name in label_map.items():
                 mask = np.where(predicted_slice == label_id, 255, 0).astype(np.uint8)
                 Image.fromarray(mask).save(masks_dir / folder_name / png_file.name)
+            exported_slices += 1
+
+    if exported_slices == 0:
+        raise RuntimeError(
+            "No slices with detected log were exported. "
+            "Check background label mapping in dataset.json and prediction outputs."
+        )
 
     ignored_present = {lid: name for lid, name in ignored_labels.items() if lid in all_present_ids}
     if ignored_present:
         ignored_text = ", ".join(f"{name}={lid}" for lid, name in sorted(ignored_present.items()))
         print(f"Ignoring predicted labels not used by the segmentation-style export: {ignored_text}")
+    print(f"Exported {exported_slices}/{len(png_files)} slices containing log pixels.")
 
     return label_map
 
 
 def default_datumaro_output(segmentation_root: Path, tree_name: str) -> Path:
     return segmentation_root.parent / f"datumaro_{tree_name}.zip"
+
 
 def export_datumaro_for_tree(segmentation_output_dir: Path, datumaro_zip: Path, tree_name: str) -> Path:
     from src.preprocessing.conversion.mask2datumaro import export_datumaro_dataset

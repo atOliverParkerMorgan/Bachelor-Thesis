@@ -12,12 +12,12 @@ from PIL import Image
 # Assuming custom colormap export is used
 COLOR_MAP = {
     (0, 0, 0): 0,       # Pure Black (Unlabeled Background)
-    (214, 149, 170): 0, # Pozadi (Wood) -> Merged into 0
-    (153, 242, 107): 1, # Hniloba (Rot)
-    (38, 114, 129): 2,  # Kura (Bark)
-    (63, 19, 205): 3,   # Poškození hmyzem (Insect Damage)
-    (174, 60, 29): 4,   # Suk (Knot)
-    (222, 137, 84): 5   # Trhlina (Crack)
+    (214, 149, 170): 1, # Pozadi (Wood) -> Merged into 0
+    (153, 242, 107): 2, # Hniloba (Rot)
+    (38, 114, 129): 3,  # Kura (Bark)
+    (63, 19, 205): 4,   # Poškození hmyzem (Insect Damage)
+    (174, 60, 29): 5,   # Suk (Knot)
+    (222, 137, 84): 6   # Trhlina (Crack)
 }
 
 def generate_dataset_json(output_dir):

@@ -6,12 +6,12 @@ import xml.etree.ElementTree as ET
 # Strict Hierarchy Mapping
 # ==========================================
 Z_ORDER_MAP = {
-    "Pozadi": "0",
-    "Kura": "1",
-    "Poškození hmyzem": "2", 
-    "Trhlina": "3",
-    "Suk": "4",
-    "Hniloba": "5"
+    "Pozadi": "1",
+    "Kura": "2",
+    "Poškození hmyzem": "3", 
+    "Trhlina": "4",
+    "Suk": "5",
+    "Hniloba": "6"
 }
 
 def fix_cvat_z_order_and_ungroup(tree_name):
