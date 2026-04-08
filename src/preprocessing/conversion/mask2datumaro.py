@@ -35,8 +35,24 @@ from datumaro.components.annotation import Mask, LabelCategories, AnnotationType
 from datumaro.components.media import Image
 
 
-DEFAULT_FOLDER_TO_ID = {"pozadi": 1, "suk": 2, "hniloba": 3, "kura": 4, "trhlina": 5}
-DEFAULT_LABEL_NAMES = ["Pozadi", "Suk", "Hniloba", "Kura", "Trhlina"]
+DEFAULT_FOLDER_TO_ID = {
+    "pozadi": 0,
+    "zdrave_drevo": 1,
+    "suk": 2,
+    "hniloba": 3,
+    "kura": 4,
+    "trhlina": 5,
+    "poskozeni_hmyzem": 6,
+}
+DEFAULT_LABEL_NAMES = [
+    "pozadi",
+    "zdrave_drevo",
+    "suk",
+    "hniloba",
+    "kura",
+    "trhlina",
+    "poskozeni_hmyzem",
+]
 
 
 class DatasetItemsIterable:
@@ -91,11 +107,6 @@ def iter_dataset_items(mask_files, ref_dir, images_dir, masks_dir, folder_to_id,
         item_annotations = []
 
         for folder, label_id in folder_to_id.items():
-            
-            # --- CRITICAL FIX ---
-            # Do NOT create explicit masks for the background class.
-            # In CVAT, background is implicit. Emitting a background mask 
-            # causes a giant polygon that covers the entire image UI.
             if label_id == 0:
                 continue
             # --------------------
@@ -231,9 +242,9 @@ def main():
     )
     parser.add_argument(
         "--label-names",
-        nargs=5,
+        nargs=7,
         default=DEFAULT_LABEL_NAMES,
-        help="Labels for Background, Knot, Decay, Bark, Crack",
+        help="Labels for pozadi, zdrave_drevo, suk, hniloba, kura, trhlina, poskozeni_hmyzem",
     )
     parser.add_argument(
         "--no-media",

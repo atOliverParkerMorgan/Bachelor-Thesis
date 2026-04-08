@@ -195,6 +195,11 @@ If training appears stuck before epoch logs on `3d_fullres`, use this safer comm
     --fold 0 \
     --make-datumaro	
 
+# preparation for fixing cvat trees
+# run this if the tree doesnt exist
+./run --tree dub4 --masks kura,pozadi
+
+poetry run python src/preprocessing/utils/zorder_cvat_fix.py --tree dub4
 
 ./run_nnunet predict-tree \
     --clusterfit \
@@ -205,6 +210,9 @@ If training appears stuck before epoch logs on `3d_fullres`, use this safer comm
     --configuration 3d_fullres \
     --fold 0 \
     --make-datumaro
+
+# to a cvat format
+poetry run python src/preprocessing/conversion/nii2mask.py --tree dub_4
 ```
 
 ## 7) Useful project files

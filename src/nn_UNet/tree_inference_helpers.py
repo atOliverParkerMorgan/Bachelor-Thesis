@@ -13,19 +13,20 @@ import numpy as np
 import SimpleITK as sitk
 from PIL import Image
 
-from src.preprocessing.conversion.ima2png import process_series
-from src.preprocessing.utils.upload_to_cvat import upload_specific_file
+from src.processing.conversion.ima2png import process_series
+from src.processing.utils.upload_to_cvat import upload_specific_file
 
 SEGMENTATION_STYLE_LABELS = {
-    "background": "pozadi",
     "pozadi": "pozadi",
+    "zdrave_drevo": "zdrave_drevo",
+    "suk": "suk",
     "hniloba": "hniloba",
     "kura": "kura",
-    "suk": "suk",
     "trhlina": "trhlina",
     "poskozeni_hmyzem": "poskozeni_hmyzem",
 }
 BACKGROUND_LABEL_ALIASES = {"background", "pozadi"}
+HEALTHY_WOOD_LABEL_ALIASES = {"zdrave_drevo", "healthy_wood"}
 
 
 def sorted_tree_slices(tree_dir: Path) -> list[Path]:
@@ -215,11 +216,48 @@ def segmentation_style_label_map(dataset_json_path: Path) -> tuple[dict[int, str
 
 def _resolve_background_label_ids(dataset_json_path: Path) -> set[int]:
     dataset_labels = _dataset_labels_by_id(dataset_json_path)
-    return {
+    background_ids = {
         label_id
         for label_id, label_name in dataset_labels.items()
         if label_name.lower() in BACKGROUND_LABEL_ALIASES
     }
+    # nnU-Net convention: class 0 is background.
+    background_ids.add(0)
+    return background_ids
+
+
+def _resolve_healthy_label_ids(dataset_json_path: Path) -> set[int]:
+    dataset_labels = _dataset_labels_by_id(dataset_json_path)
+    return {
+        label_id
+        for label_id, label_name in dataset_labels.items()
+        if label_name.lower() in HEALTHY_WOOD_LABEL_ALIASES
+    }
+
+
+def _resolve_defect_label_ids(dataset_json_path: Path) -> set[int]:
+    dataset_labels = _dataset_labels_by_id(dataset_json_path)
+    return {
+        label_id
+        for label_id, label_name in dataset_labels.items()
+        if label_name.lower() not in BACKGROUND_LABEL_ALIASES
+        and label_name.lower() not in HEALTHY_WOOD_LABEL_ALIASES
+    }
+
+
+def _derive_healthy_wood_mask(
+    predicted_slice: np.ndarray,
+    background_ids: Iterable[int],
+    defect_ids: Iterable[int],
+) -> np.ndarray:
+    background_ids = set(background_ids)
+    defect_ids = set(defect_ids)
+
+    occupied = np.zeros(predicted_slice.shape, dtype=bool)
+    for class_id in background_ids.union(defect_ids):
+        occupied |= predicted_slice == class_id
+
+    return np.where(~occupied, 255, 0).astype(np.uint8)
 
 
 def _extract_prediction_slice(prediction_image: sitk.Image) -> np.ndarray:
@@ -259,6 +297,8 @@ def export_prediction_masks(
     if not label_map:
         raise RuntimeError("No supported segmentation-style labels were found in dataset.json")
     background_ids = _resolve_background_label_ids(dataset_json_path)
+    healthy_ids = _resolve_healthy_label_ids(dataset_json_path)
+    defect_ids = _resolve_defect_label_ids(dataset_json_path)
 
     png_files = sorted_tree_slices(tree_dir)
 
@@ -291,7 +331,10 @@ def export_prediction_masks(
             all_present_ids.update(int(v) for v in np.unique(predicted_slice).tolist())
             shutil.copy2(png_file, images_dir / png_file.name)
             for label_id, folder_name in label_map.items():
-                mask = np.where(predicted_slice == label_id, 255, 0).astype(np.uint8)
+                if label_id in healthy_ids:
+                    mask = _derive_healthy_wood_mask(predicted_slice, background_ids, defect_ids)
+                else:
+                    mask = np.where(predicted_slice == label_id, 255, 0).astype(np.uint8)
                 Image.fromarray(mask).save(masks_dir / folder_name / png_file.name)
             exported_slices += 1
     else:
@@ -308,7 +351,10 @@ def export_prediction_masks(
             all_present_ids.update(int(v) for v in np.unique(predicted_slice).tolist())
             shutil.copy2(png_file, images_dir / png_file.name)
             for label_id, folder_name in label_map.items():
-                mask = np.where(predicted_slice == label_id, 255, 0).astype(np.uint8)
+                if label_id in healthy_ids:
+                    mask = _derive_healthy_wood_mask(predicted_slice, background_ids, defect_ids)
+                else:
+                    mask = np.where(predicted_slice == label_id, 255, 0).astype(np.uint8)
                 Image.fromarray(mask).save(masks_dir / folder_name / png_file.name)
             exported_slices += 1
 
@@ -332,7 +378,7 @@ def default_datumaro_output(segmentation_root: Path, tree_name: str) -> Path:
 
 
 def export_datumaro_for_tree(segmentation_output_dir: Path, datumaro_zip: Path, tree_name: str) -> Path:
-    from src.preprocessing.conversion.mask2datumaro import export_datumaro_dataset
+    from src.processing.conversion.mask2datumaro import export_datumaro_dataset
     
     return export_datumaro_dataset(
         segmentation_output=segmentation_output_dir,

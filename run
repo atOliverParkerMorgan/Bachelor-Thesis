@@ -14,6 +14,7 @@ UPLOAD_JOB_ID=""
 TREE=""
 DATUMARO_NO_MEDIA=false
 CLEAN_LOGS_ONLY=false
+series_list=()
 
 # Parse arguments
 
@@ -195,8 +196,6 @@ if [ -d "$temp_extract" ]; then
     rm -rf "$temp_extract"
 fi
 mkdir -p "$temp_extract"
-
-declare -a series_list
 
 for zip_file in "${zip_files[@]}"; do
     basename="${zip_file##*/}"

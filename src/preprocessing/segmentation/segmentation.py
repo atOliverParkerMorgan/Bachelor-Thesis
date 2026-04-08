@@ -12,7 +12,15 @@ from .seg_pozadi import segment_background_and_inner_log
 from .seg_trhlina_and_hniloba import segment_trhlina, refine_trhlina_mask
 from .seg_common import apply_clahe
 
-MASK_NAMES = ["pozadi", "kura", "suk", "hniloba", "trhlina"]
+MASK_NAMES = [
+    "pozadi",
+    "zdrave_drevo",
+    "suk",
+    "hniloba",
+    "kura",
+    "trhlina",
+    "poskozeni_hmyzem",
+]
 
 OUTER_RING_WIDTH_RATIO = 0.03
 OUTER_RING_WIDTH_MIN_PX = 6
@@ -55,7 +63,7 @@ def build_masks(img, requested_masks=None):
     results = {}
 
     # Suk 
-    need_suk = any(m in requested_masks for m in ("suk", "hniloba", "trhlina"))
+    need_suk = any(m in requested_masks for m in ("suk", "hniloba", "trhlina", "zdrave_drevo"))
     suk_mask = segment_suk(log_img_clahe) if need_suk else None
     if "suk" in requested_masks and suk_mask is not None:
         results["suk"] = suk_mask
@@ -66,7 +74,7 @@ def build_masks(img, requested_masks=None):
     dark_combined = None
 
 
-    if "trhlina" in requested_masks or "hniloba" in requested_masks:
+    if "trhlina" in requested_masks or "hniloba" in requested_masks or "zdrave_drevo" in requested_masks:
         raw_dark_mask = segment_trhlina(log_img, background_mask)
         raw_dark_mask = cv2.bitwise_and(raw_dark_mask, log_mask)
         trhlina_mask, hniloba_mask = refine_trhlina_mask(
@@ -81,7 +89,7 @@ def build_masks(img, requested_masks=None):
 
     # kura
     kura_mask = None
-    if "kura" in requested_masks or "pozadi" in requested_masks:
+    if "kura" in requested_masks or "zdrave_drevo" in requested_masks:
         raw_kura_mask = segment_crust(log_img_clahe)
         kura_mask = refine_kura_outer_crust(
             raw_kura_mask,
@@ -93,15 +101,24 @@ def build_masks(img, requested_masks=None):
         if "kura" in requested_masks:
             results["kura"] = kura_mask
 
-    # pozadi
+    # Explicit empty-air/background mask outside the log.
     if "pozadi" in requested_masks:
-        foreground = kura_mask if kura_mask is not None else np.zeros_like(log_mask)
-        for extra_mask in (trhlina_mask, hniloba_mask):
-            if extra_mask is not None:
-                foreground = cv2.bitwise_or(foreground, extra_mask)
-        results["pozadi"] = cv2.bitwise_and(
-            iu.negative(inner_log_mask), cv2.bitwise_not(foreground)
-        )
+        results["pozadi"] = background_mask
+
+    # Placeholder: this classical pipeline does not currently detect insect damage.
+    poskozeni_hmyzem_mask = np.zeros_like(log_mask)
+    if "poskozeni_hmyzem" in requested_masks:
+        results["poskozeni_hmyzem"] = poskozeni_hmyzem_mask
+
+    # Healthy wood is everything inside the log that is not any other class mask.
+    if "zdrave_drevo" in requested_masks:
+        occupied = np.zeros_like(log_mask)
+        for class_mask in (kura_mask, suk_mask, hniloba_mask, trhlina_mask, poskozeni_hmyzem_mask):
+            if class_mask is not None:
+                occupied = cv2.bitwise_or(occupied, class_mask)
+
+        zdrave_drevo_mask = cv2.bitwise_and(log_mask, cv2.bitwise_not(occupied))
+        results["zdrave_drevo"] = zdrave_drevo_mask
 
     return results
 

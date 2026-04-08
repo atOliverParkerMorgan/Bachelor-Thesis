@@ -470,7 +470,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 def run_prepare(args: argparse.Namespace) -> None:
     """Uses the new segmask2ima pipeline to automatically process all logs in ground_truth."""
-    from src.preprocessing.conversion.segmask2ima import process_tree
+    from src.processing.conversion.segmask2ima import process_tree
     
     zip_files = list(args.source.glob("*.zip"))
     if not zip_files:
@@ -625,10 +625,15 @@ def run_predict_tree(args: argparse.Namespace, env: Dict[str, str]) -> None:
         write_tree_inference_nifti,
         export_prediction_masks,
         export_datumaro_for_tree,
-        default_datumaro_output
     )
 
     tree_name = args.tree
+    tree_slug = tree_name.lower().replace(" ", "_")
+    tree_output_root = args.segmentation_output_root / tree_slug
+    tree_segmentation_output = tree_output_root / "segmentation_style"
+    tree_nifti_output = tree_output_root / "nnunet_nifti_predictions"
+    tree_output_root.mkdir(parents=True, exist_ok=True)
+
     dataset_json_path = args.nnunet_root / "nnUNet_raw" / f"Dataset{args.dataset_id:03d}_{args.dataset_name}" / "dataset.json"
 
     # Create temporary directories for the conversion pipeline
@@ -678,17 +683,17 @@ def run_predict_tree(args: argparse.Namespace, env: Dict[str, str]) -> None:
             export_prediction_masks(
                 prediction_dir=nifti_out_dir,
                 tree_dir=tree_dir,
-                segmentation_output_dir=args.segmentation_output_root,
+                segmentation_output_dir=tree_segmentation_output,
                 dataset_json_path=dataset_json_path,
                 tree_name=tree_name,
                 is_3d=is_3d
             )
-            datumaro_zip = default_datumaro_output(args.segmentation_output_root, tree_name)
-            export_datumaro_for_tree(args.segmentation_output_root, datumaro_zip, tree_name)
+            datumaro_zip = tree_output_root / f"datumaro_{tree_name}.zip"
+            export_datumaro_for_tree(tree_segmentation_output, datumaro_zip, tree_name)
             log(f"Success! Datumaro dataset zipped at: {datumaro_zip}")
         else:
-            shutil.copytree(nifti_out_dir, args.segmentation_output_root, dirs_exist_ok=True)
-            log(f"Saved standard NIfTI predictions to {args.segmentation_output_root}")
+            shutil.copytree(nifti_out_dir, tree_nifti_output, dirs_exist_ok=True)
+            log(f"Saved standard NIfTI predictions to {tree_nifti_output}")
 
     finally:
         shutil.rmtree(temp_dir, ignore_errors=True)

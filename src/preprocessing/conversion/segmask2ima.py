@@ -5,38 +5,44 @@ import argparse
 import numpy as np
 import SimpleITK as sitk
 from PIL import Image
+from pathlib import Path
 
 # ==========================================
 # CVAT RGB to nnU-Net Class Mapping
 # ==========================================
 # Assuming custom colormap export is used
 COLOR_MAP = {
-    (0, 0, 0): 0,       # Pure Black (Unlabeled Background)
-    (214, 149, 170): 1, # Pozadi (Wood) -> Merged into 0
-    (153, 242, 107): 2, # Hniloba (Rot)
-    (38, 114, 129): 3,  # Kura (Bark)
-    (63, 19, 205): 4,   # Poškození hmyzem (Insect Damage)
-    (174, 60, 29): 5,   # Suk (Knot)
-    (222, 137, 84): 6   # Trhlina (Crack)
+    (0, 0, 0): 0,       # Pozadi (empty air / scanner bed)
+    (214, 149, 170): 1, # zdrave_drevo (healthy wood)
+    (174, 60, 29): 2,   # suk
+    (153, 242, 107): 3, # hniloba
+    (38, 114, 129): 4,  # kura
+    (222, 137, 84): 5,  # trhlina
+    (63, 19, 205): 6,   # poskozeni_hmyzem
 }
 
-def generate_dataset_json(output_dir):
+def generate_dataset_json(output_dir: str | Path):
+    output_dir = Path(output_dir)
+    labels_tr_dir = output_dir / "labelsTr"
+    num_training_cases = len(list(labels_tr_dir.glob("*.nii.gz"))) if labels_tr_dir.exists() else 0
+
     dataset_info = {
         "channel_names": { "0": "CT" },
         "labels": {
-            "background": 0,
-            "Hniloba": 1,
-            "Kura": 2,
-            "Poskozeni_hmyzem": 3,
-            "Suk": 4,
-            "Trhlina": 5
+            "pozadi": 0,
+            "zdrave_drevo": 1,
+            "suk": 2,
+            "hniloba": 3,
+            "kura": 4,
+            "trhlina": 5,
+            "poskozeni_hmyzem": 6,
         },
-        "numTraining": 1, 
+        "numTraining": num_training_cases,
         "file_ending": ".nii.gz"
     }
     
-    json_path = os.path.join(output_dir, "dataset.json")
-    with open(json_path, 'w', encoding='utf-8') as f:
+    json_path = output_dir / "dataset.json"
+    with json_path.open('w', encoding='utf-8') as f:
         json.dump(dataset_info, f, indent=4)
 
 def find_ima_directory(extract_dir):
@@ -92,6 +98,7 @@ def process_tree(tree_name):
         mask_path = os.path.join(cvat_masks_dir, mask_file)
         # Convert to RGB array
         mask_rgb = np.array(Image.open(mask_path).convert('RGB'))
+        # Default to background so any unknown/unmapped color becomes class 0.
         mask_2d_int = np.zeros((cropped_size[1], cropped_size[0]), dtype=np.uint8)
         
         # Fast direct match for each color in our map
