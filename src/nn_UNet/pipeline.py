@@ -111,6 +111,10 @@ def apply_runtime_env_overrides(env: Dict[str, str], args: argparse.Namespace) -
     elif compile_mode == "on":
         env["nnUNet_compile"] = "1"
 
+    pretrained_weights = getattr(args, "pretrained_weights", None)
+    if pretrained_weights is not None:
+        env["NNUNET_PRETRAINED_WEIGHTS"] = str(Path(pretrained_weights).resolve())
+
     n_proc_da = getattr(args, "n_proc_da", None)
     if n_proc_da is not None:
         env["nnUNet_n_proc_DA"] = str(n_proc_da)
@@ -342,6 +346,33 @@ def detect_gpu_vram_gb() -> float | None:
         return None
 
 
+def install_custom_trainer_to_nnunetv2() -> bool:
+    """Copy nnUNetTrainerLungPretrained into nnunetv2's trainer variants directory.
+
+    nnUNetv2_train discovers trainers by searching recursively inside the
+    nnunetv2 package.  Copying the file there is the standard way to register
+    a custom trainer without modifying the package.  Returns True on success.
+    """
+    try:
+        import nnunetv2
+    except ImportError:
+        log("Warning: nnunetv2 not importable — cannot install custom trainer.")
+        return False
+
+    trainer_source = Path(__file__).parent / "nnunet_trainer_pretrained.py"
+    if not trainer_source.exists():
+        raise FileNotFoundError(f"Custom trainer source not found: {trainer_source}")
+
+    variants_dir = Path(nnunetv2.__path__[0]) / "training" / "nnUNetTrainer" / "variants"
+    variants_dir.mkdir(exist_ok=True)
+    dest = variants_dir / trainer_source.name
+
+    if not dest.exists() or dest.stat().st_mtime < trainer_source.stat().st_mtime:
+        shutil.copy2(trainer_source, dest)
+        log(f"Installed custom trainer to: {dest}")
+    return True
+
+
 def prediction_worker_profile(vram_gb: float | None) -> tuple[int, int]:
     """Choose npp/nps to maximize speed while keeping VRAM usage reasonable."""
     import os
@@ -421,6 +452,17 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Resume training from checkpoint_latest.pth (nnUNetv2_train --c)",
     )
+    train.add_argument(
+        "--pretrained-weights",
+        type=Path,
+        default=None,
+        metavar="CHECKPOINT",
+        help=(
+            "Path to a pretrained nnUNet checkpoint (.pth or .model). "
+            "Weights are loaded with strict=False so the output head trains from scratch. "
+            "Install the Lung zip first: nnUNetv2_install_pretrained_model_from_zip Task006_Lung.zip"
+        ),
+    )
     add_clusterfit_arguments(train)
 
     predict = subparsers.add_parser("predict", help="Run nnU-Net inference")
@@ -461,6 +503,13 @@ def build_parser() -> argparse.ArgumentParser:
     all_cmd.add_argument("--n-proc-da", type=int, default=4)
     all_cmd.add_argument("--cpu-threads", type=int, default=1)
     all_cmd.add_argument("--continue-training", action="store_true")
+    all_cmd.add_argument(
+        "--pretrained-weights",
+        type=Path,
+        default=None,
+        metavar="CHECKPOINT",
+        help="Path to pretrained checkpoint; enables nnUNetTrainerLungPretrained.",
+    )
     all_cmd.add_argument("--plan-configurations", nargs="+", default=["3d_fullres"])
     all_cmd.add_argument("--plan-num-processes", type=int, default=1)
     add_clusterfit_arguments(all_cmd)
@@ -470,7 +519,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 def run_prepare(args: argparse.Namespace) -> None:
     """Uses the new segmask2ima pipeline to automatically process all logs in ground_truth."""
-    from src.processing.conversion.segmask2ima import process_tree
+    from src.preprocessing.conversion.segmask2ima import process_tree
     
     zip_files = list(args.source.glob("*.zip"))
     if not zip_files:
@@ -502,6 +551,19 @@ def run_train(args: argparse.Namespace, env: Dict[str, str]) -> None:
         plans_identifier=plans_identifier,
     )
 
+    # Determine trainer — pretrained-weights triggers the custom transfer trainer
+    # unless the user has explicitly chosen a different one.
+    pretrained_weights = getattr(args, "pretrained_weights", None)
+    trainer = getattr(args, "trainer", None)
+    if pretrained_weights and not trainer:
+        trainer = "nnUNetTrainerLungPretrained"
+        if not install_custom_trainer_to_nnunetv2():
+            log(
+                "Warning: custom trainer installation failed. "
+                "Falling back to base nnUNetTrainer with built-in --pretrained_weights."
+            )
+            trainer = None
+
     cmd = [
         "nnUNetv2_train",
         str(args.dataset_id),
@@ -510,8 +572,11 @@ def run_train(args: argparse.Namespace, env: Dict[str, str]) -> None:
         "-p",
         plans_identifier,
     ]
-    if args.trainer:
-        cmd.extend(["-tr", args.trainer])
+    if trainer:
+        cmd.extend(["-tr", trainer])
+    elif pretrained_weights:
+        # Fallback: use nnUNetv2's native partial-weight loading
+        cmd.extend(["--pretrained_weights", str(Path(pretrained_weights).resolve())])
     if args.continue_training:
         cmd.append("--c")
 
@@ -710,8 +775,8 @@ def submit_to_clusterfit(args: argparse.Namespace, env: Dict[str, str]) -> None:
     for key in (
         "PATH", "HOME", "LANG", "LC_ALL", "LD_LIBRARY_PATH", "VIRTUAL_ENV", 
         "PYTHONPATH", "PYTHONUNBUFFERED", "nnUNet_raw", "nnUNet_preprocessed", 
-        "nnUNet_results", "NNUNET_SAVE_EVERY", "NNUNET_INITIAL_LR", 
-        "NNUNET_SKIP_ARCH_PLOT", "nnUNet_compile", "nnUNet_n_proc_DA", 
+        "nnUNet_results", "NNUNET_SAVE_EVERY", "NNUNET_INITIAL_LR",
+        "NNUNET_PRETRAINED_WEIGHTS", "NNUNET_SKIP_ARCH_PLOT", "nnUNet_compile", "nnUNet_n_proc_DA",
         "OMP_NUM_THREADS", "MKL_NUM_THREADS", "OPENBLAS_NUM_THREADS", "NUMEXPR_NUM_THREADS",
     ):
         value = env.get(key)

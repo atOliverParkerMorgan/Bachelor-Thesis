@@ -136,7 +136,7 @@ Use the same commands with cluster flags.
 	--slurm-partition cpu \
 	--slurm-cpus-per-task 16 \
 	--slurm-time 04:00:00 \
-	--configurations 3d_lower
+	--configurations 3d_fullres
 ```
 
 ### Train on GPU queue (recommended A100 40GB)
@@ -147,12 +147,12 @@ Use the same commands with cluster flags.
 	--slurm-partition gpu \
 	--slurm-cpus-per-task 8 \
 	--slurm-gpu a100_40 \
-	--slurm-time 24:00:00 \
-	--configuration 3d_lower \
+	--slurm-time 72:00:00 \
+	--configuration 3d_fullres \
 	--compile off \
 	--n-proc-da 4 \
 	--cpu-threads 1 \
-	--fold 0
+	--fold 4
 ```
 
 If training appears stuck before epoch logs on `3d_fullres`, use this safer command:
@@ -170,6 +170,56 @@ If training appears stuck before epoch logs on `3d_fullres`, use this safer comm
 	--cpu-threads 1 \
 	--fold 0
 ```
+
+### Transfer learning with pretrained Lung weights (recommended)
+
+Lung CT and wood CT share similar HU value ranges, making the Lung model the best
+pretrained starting point.  The custom trainer `nnUNetTrainerLungPretrained` loads
+encoder weights with `strict=False` so the output head always trains from scratch.
+
+**One-time setup — run on the cluster before training:**
+
+```bash
+# Upload the zip to the cluster first, then:
+nnUNetv2_install_pretrained_model_from_zip Task006_Lung.zip
+# Prints the installed results path, e.g.:
+# $nnUNet_results/Dataset006_Lung/nnUNetTrainer__nnUNetPlans__3d_fullres/fold_0/checkpoint_final.pth
+```
+
+**Train with pretrained weights (best parameters for this dataset):**
+
+```bash
+./run_nnunet train \
+    --clusterfit \
+    --slurm-partition gpu \
+    --slurm-cpus-per-task 8 \
+    --slurm-gpu a100_40 \
+    --slurm-time 48:00:00 \
+    --configuration 3d_fullres \
+    --fold 0 \
+    --compile off \
+    --n-proc-da 4 \
+    --cpu-threads 1 \
+    --initial-lr 1e-3 \
+    --pretrained-weights $nnUNet_results/Dataset006_Lung/nnUNetTrainer__nnUNetPlans__3d_fullres/fold_0/checkpoint_final.pth
+```
+
+**Why these parameters:**
+
+| Parameter | Value | Reason |
+|---|---|---|
+| `--configuration` | `3d_fullres` | Best accuracy for 3-D wood CT volumes |
+| `--initial-lr` | `1e-3` | Lower than default (0.01); prevents overwriting pretrained features early |
+| `--n-proc-da` | `4` | Saturates A100 40 GB without memory pressure |
+| `--compile` | `off` | Avoids torch.compile startup hang on the cluster |
+| `--slurm-time` | `48:00:00` | Sufficient for 1000 epochs on a small dataset with transfer weights |
+| `--fold` | `0` | Single fold; add `1 2 3 4` as separate jobs once fold 0 validates |
+
+The pipeline automatically:
+1. Copies `nnunet_trainer_pretrained.py` into the nnunetv2 variants directory so
+   `nnUNetv2_train -tr nnUNetTrainerLungPretrained` can discover it.
+2. Passes the checkpoint path via `NNUNET_PRETRAINED_WEIGHTS`.
+3. Falls back to nnUNetv2's built-in `--pretrained_weights` if the copy fails.
 
 ### Predict on cluster
 
