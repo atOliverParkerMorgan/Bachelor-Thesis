@@ -6,7 +6,7 @@ from monai.transforms import (
     Orientationd,
     RandAffined,
     RandAdjustContrastd,
-    RandCropByPosNegLabeld,
+    RandCropByLabelClassesd,
     RandFlipd,
     RandGaussianNoised,
     ScaleIntensityRanged,
@@ -14,12 +14,29 @@ from monai.transforms import (
 )
 
 
-def get_train_transforms(patch_size, num_samples):
+def get_train_transforms(
+    patch_size,
+    num_samples,
+    num_classes: int = 7,
+    rare_label_idx: int = 6,
+    rare_class_oversample: int = 8,
+):
+    """Build training transforms with patch-level focus on the rare class.
+
+    ``RandCropByLabelClassesd`` is used instead of ``RandCropByPosNegLabeld``
+    so that crops from volumes containing label ``rare_label_idx`` are centred
+    on that class with ``rare_class_oversample`` times higher probability than
+    any other class — mirroring the patch-forcing strategy of
+    nnUNetTrainerRareClassBoostWandb.
+    """
+    ratios = [1.0] * num_classes
+    ratios[rare_label_idx] = float(rare_class_oversample)
+
     return Compose(
         [
             LoadImaged(keys=("image", "label")),
             EnsureChannelFirstd(keys=("image", "label")),
-            Orientationd(keys=("image", "label"), axcodes="RAS", labels=None),
+            Orientationd(keys=("image", "label"), axcodes="RAS"),
             ScaleIntensityRanged(
                 keys="image",
                 a_min=-1000,
@@ -29,15 +46,16 @@ def get_train_transforms(patch_size, num_samples):
                 clip=True,
             ),
             SpatialPadd(keys=("image", "label"), spatial_size=patch_size),
-            RandCropByPosNegLabeld(
+            RandCropByLabelClassesd(
                 keys=("image", "label"),
                 label_key="label",
                 spatial_size=patch_size,
-                pos=1,
-                neg=1,
+                ratios=ratios,
+                num_classes=num_classes,
                 num_samples=num_samples,
                 image_key="image",
                 image_threshold=0,
+                warn=False,
             ),
             RandFlipd(keys=("image", "label"), prob=0.5, spatial_axis=0),
             RandFlipd(keys=("image", "label"), prob=0.5, spatial_axis=1),
@@ -63,7 +81,7 @@ def get_val_transforms():
         [
             LoadImaged(keys=("image", "label")),
             EnsureChannelFirstd(keys=("image", "label")),
-            Orientationd(keys=("image", "label"), axcodes="RAS", labels=None),
+            Orientationd(keys=("image", "label"), axcodes="RAS"),
             ScaleIntensityRanged(
                 keys="image",
                 a_min=-1000,

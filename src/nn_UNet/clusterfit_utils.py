@@ -301,6 +301,7 @@ def build_slurm_config_from_args(
         "train": "12:00:00",
         "predict": "02:00:00",
         "predict-tree": "02:00:00",
+        "custom-train": "24:00:00",
     }
     default_time = time_limits.get(command_name, "02:00:00")
     time_limit = args.slurm_time or default_time

@@ -232,21 +232,32 @@ The pipeline automatically:
 2. Passes the checkpoint path via `NNUNET_PRETRAINED_WEIGHTS`.
 3. Falls back to nnUNetv2's built-in `--pretrained_weights` if the copy fails.
 
-## 6) Custom 3D model
+## 6) Custom 3D model (SwinUNETR)
 
-The custom trainer now uses a 3-D MONAI U-Net with settings chosen to stay close to the nnU-Net `3d_fullres` configuration:
+The custom trainer uses a 3-D **SwinUNETR** (Swin Transformer U-Net) from MONAI.
+Label 6 (`poskozeni_hmyzem`) is boosted with the same three-layer strategy used by
+`nnUNetTrainerRareClassBoostWandb`:
 
-- patch size: `128 384 128`
-- batch size: `2`
-- optimizer: `AdamW`
-- learning rate: `1e-3`
-- weight decay: `1e-5`
-- scheduler: cosine annealing
-- epochs: `1000`
-- classes: `7`
-- intensity clipping: `[-1000, 3000]` mapped to `[0, 1]`
+1. **Case-level oversampling** — cases containing label 6 are duplicated 8× so they appear more often per epoch.
+2. **Patch-level focus** — `RandCropByLabelClassesd` gives label-6 voxels 8× higher crop-centre probability.
+3. **Weighted CE loss** — label-6 voxels contribute 30× more to the cross-entropy term of the DiceCE loss.
 
-Run it with the raw nnU-Net volumes:
+| Setting | Value |
+|---|---|
+| Model | SwinUNETR (`feature_size=48`) |
+| Patch size | `128 × 384 × 128` |
+| Batch size (crops / volume) | `2` |
+| Optimizer | AdamW |
+| Learning rate | `1e-3` |
+| Weight decay | `1e-5` |
+| Scheduler | Cosine annealing |
+| Epochs | `1000` |
+| Classes | `7` |
+| Intensity clipping | `[−1000, 3000] → [0, 1]` |
+| Rare-class oversample | `8×` case-level |
+| Rare-class CE weight | `30×` (label 6) |
+
+### Local run
 
 ```bash
 poetry run python -m src.custom_model.train \
@@ -257,10 +268,29 @@ poetry run python -m src.custom_model.train \
 	--batch-size 2 \
 	--patch-size 128 384 128 \
 	--learning-rate 1e-3 \
-	--weight-decay 1e-5 \
 	--num-classes 7 \
 	--val-fraction 0.25
 ```
+
+### Run on ClusterFIT (recommended)
+
+Uses `./run_nnunet custom-train`. Image/label directories default to
+`nnunet_root/nnUNet_raw/Dataset001_BPWoodDefects/{imagesTr,labelsTr}`.
+
+```bash
+./run_nnunet custom-train \
+    --clusterfit \
+    --slurm-partition gpu \
+    --slurm-cpus-per-task 8 \
+    --slurm-gpu a100_40 \
+    --slurm-time 24:00:00 \
+    --epochs 1000 \
+    --batch-size 2 \
+    --patch-size 128 384 128 \
+    --learning-rate 1e-3
+```
+
+Resume from a checkpoint is not currently supported by the custom model — restart training with `--output-dir` pointing to a fresh directory or keep `last_model.pth` and re-implement resumption manually.
 
 The trainer writes `best_model.pth`, `last_model.pth`, and the resolved config JSON into the output directory.
 
@@ -275,6 +305,17 @@ The trainer writes `best_model.pth`, `last_model.pth`, and the resolved config J
 	--output ./predictions \
 	--configuration 3d_fullres \
 	--fold 0
+
+./run_nnunet predict \
+--clusterfit \
+--slurm-partition gpu \
+--slurm-gpu a100_40 \
+--input DUB_4.zip \
+--output ./predictions \
+--configuration 3d_fullres \
+--fold 0 \
+--trainer nnUNetTrainerLungPretrainedWandb \
+--plans-identifier nnUNetResEncUNetLPlans \
 
 # full pipeline to -datumaro	
 ./run_nnunet predict-tree \

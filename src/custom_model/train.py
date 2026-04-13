@@ -15,7 +15,7 @@ from monai.transforms import AsDiscrete
 
 from src.custom_model.dataset import WoodDefectDataset
 from src.custom_model.losses import get_loss
-from src.custom_model.model import get_model
+from src.custom_model.model import get_swin_model
 from src.custom_model.transforms import get_train_transforms, get_val_transforms
 
 
@@ -35,6 +35,10 @@ class TrainConfig:
     seed: int = 42
     amp: bool = True
     sliding_window_overlap: float = 0.5
+    # Rare-class (label 6 = poskozeni_hmyzem) handling
+    rare_label_idx: int = 6
+    rare_class_weight: float = 30.0
+    oversample_factor: int = 8
 
 
 def _seed_everything(seed: int) -> None:
@@ -68,12 +72,23 @@ def train(config: TrainConfig) -> Path:
     output_dir.mkdir(parents=True, exist_ok=True)
     (output_dir / "config.json").write_text(json.dumps(asdict(config), indent=2), encoding="utf-8")
 
-    dataset = WoodDefectDataset(config.image_dir, config.label_dir)
+    # Build dataset with rare-class case-level oversampling
+    dataset = WoodDefectDataset(
+        config.image_dir,
+        config.label_dir,
+        rare_label_idx=config.rare_label_idx,
+        oversample_factor=config.oversample_factor,
+    )
     train_cases, val_cases = _split_cases(dataset.samples, config.val_fraction, config.seed)
 
     train_ds = CacheDataset(
         data=train_cases,
-        transform=get_train_transforms(config.patch_size, config.batch_size),
+        transform=get_train_transforms(
+            config.patch_size,
+            config.batch_size,
+            num_classes=config.num_classes,
+            rare_label_idx=config.rare_label_idx,
+        ),
         cache_rate=1.0,
         num_workers=config.num_workers,
     )
@@ -101,14 +116,21 @@ def train(config: TrainConfig) -> Path:
     )
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model = get_model(num_classes=config.num_classes).to(device)
-    loss_fn = get_loss()
+    model = get_swin_model(
+        num_classes=config.num_classes,
+        img_size=config.patch_size,
+    ).to(device)
+    loss_fn = get_loss(
+        num_classes=config.num_classes,
+        rare_label_idx=config.rare_label_idx,
+        rare_class_weight=config.rare_class_weight,
+    )
     optimizer = torch.optim.AdamW(model.parameters(), lr=config.learning_rate, weight_decay=config.weight_decay)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=config.epochs)
     metric = DiceMetric(include_background=False, reduction="mean_batch")
     post_pred = AsDiscrete(argmax=True, to_onehot=config.num_classes)
     post_label = AsDiscrete(to_onehot=config.num_classes)
-    scaler = torch.cuda.amp.GradScaler(enabled=config.amp and device.type == "cuda")
+    scaler = torch.amp.GradScaler("cuda", enabled=config.amp and device.type == "cuda")
 
     best_metric = float("-inf")
     best_metric_epoch = -1
@@ -124,7 +146,7 @@ def train(config: TrainConfig) -> Path:
             labels = batch_data["label"].to(device)
 
             optimizer.zero_grad(set_to_none=True)
-            with torch.cuda.amp.autocast(enabled=config.amp and device.type == "cuda"):
+            with torch.amp.autocast("cuda", enabled=config.amp and device.type == "cuda"):
                 outputs = model(inputs)
                 loss = loss_fn(outputs, labels)
 
@@ -172,7 +194,7 @@ def train(config: TrainConfig) -> Path:
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Train the custom 3D wood-defect model.")
+    parser = argparse.ArgumentParser(description="Train the custom 3D SwinUNETR wood-defect model.")
     parser.add_argument("--image-dir", required=True, help="Directory with input NIfTI volumes.")
     parser.add_argument("--label-dir", required=True, help="Directory with label NIfTI volumes.")
     parser.add_argument("--output-dir", default="./output/custom_model")
@@ -187,6 +209,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--no-amp", action="store_true", help="Disable mixed precision.")
     parser.add_argument("--sliding-window-overlap", type=float, default=0.5)
+    parser.add_argument("--rare-label-idx", type=int, default=6,
+                        help="Label index to boost (default: 6 = poskozeni_hmyzem).")
+    parser.add_argument("--rare-class-weight", type=float, default=30.0,
+                        help="CE loss weight multiplier for the rare class (default: 30).")
+    parser.add_argument("--oversample-factor", type=int, default=8,
+                        help="Extra case copies per epoch for the rare class (default: 8).")
     return parser
 
 
@@ -207,6 +235,9 @@ def parse_args(argv=None) -> TrainConfig:
         seed=args.seed,
         amp=not args.no_amp,
         sliding_window_overlap=args.sliding_window_overlap,
+        rare_label_idx=args.rare_label_idx,
+        rare_class_weight=args.rare_class_weight,
+        oversample_factor=args.oversample_factor,
     )
 
 

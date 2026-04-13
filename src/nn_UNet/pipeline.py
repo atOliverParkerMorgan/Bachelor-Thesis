@@ -544,6 +544,46 @@ def build_parser() -> argparse.ArgumentParser:
     all_cmd.add_argument("--plan-num-processes", type=int, default=1)
     add_clusterfit_arguments(all_cmd)
 
+    custom_train_p = subparsers.add_parser(
+        "custom-train",
+        help="Train the custom 3D SwinUNETR wood-defect model (supports ClusterFIT)",
+    )
+    custom_train_p.add_argument(
+        "--image-dir", type=Path, default=None,
+        help="Directory with input NIfTI volumes "
+             "(default: nnunet_root/nnUNet_raw/DatasetXXX_<name>/imagesTr)",
+    )
+    custom_train_p.add_argument(
+        "--label-dir", type=Path, default=None,
+        help="Directory with label NIfTI volumes "
+             "(default: nnunet_root/nnUNet_raw/DatasetXXX_<name>/labelsTr)",
+    )
+    custom_train_p.add_argument("--output-dir", type=Path, default=Path("./output/custom_model"))
+    custom_train_p.add_argument("--epochs", type=int, default=1000)
+    custom_train_p.add_argument("--batch-size", type=int, default=2)
+    custom_train_p.add_argument("--patch-size", type=int, nargs=3, default=[128, 384, 128])
+    custom_train_p.add_argument("--learning-rate", type=float, default=1e-3)
+    custom_train_p.add_argument("--weight-decay", type=float, default=1e-5)
+    custom_train_p.add_argument("--num-classes", type=int, default=7)
+    custom_train_p.add_argument("--val-fraction", type=float, default=0.25)
+    custom_train_p.add_argument("--num-workers", type=int, default=4)
+    custom_train_p.add_argument("--seed", type=int, default=42)
+    custom_train_p.add_argument("--no-amp", action="store_true", help="Disable mixed precision.")
+    custom_train_p.add_argument("--sliding-window-overlap", type=float, default=0.5)
+    custom_train_p.add_argument(
+        "--rare-label-idx", type=int, default=6,
+        help="Label index to boost (default: 6 = poskozeni_hmyzem).",
+    )
+    custom_train_p.add_argument(
+        "--rare-class-weight", type=float, default=30.0,
+        help="CE loss weight multiplier for the rare class (default: 30).",
+    )
+    custom_train_p.add_argument(
+        "--oversample-factor", type=int, default=8,
+        help="Extra case copies per epoch for the rare class (default: 8).",
+    )
+    add_clusterfit_arguments(custom_train_p)
+
     return parser
 
 
@@ -811,6 +851,42 @@ def run_predict_tree(args: argparse.Namespace, env: Dict[str, str]) -> None:
         log("Cleaned up temporary prediction files.")
 # ---------------------------------------------------
 
+def run_custom_train(args: argparse.Namespace, env: Dict[str, str]) -> None:
+    """Run `python -m src.custom_model.train` with the args from the custom-train subcommand."""
+    raw_root = args.nnunet_root / "nnUNet_raw" / f"Dataset{args.dataset_id:03d}_{args.dataset_name}"
+    image_dir = args.image_dir or (raw_root / "imagesTr")
+    label_dir = args.label_dir or (raw_root / "labelsTr")
+
+    cmd = [
+        sys.executable, "-m", "src.custom_model.train",
+        "--image-dir", str(image_dir),
+        "--label-dir", str(label_dir),
+        "--output-dir", str(args.output_dir),
+        "--epochs", str(args.epochs),
+        "--batch-size", str(args.batch_size),
+        "--patch-size", str(args.patch_size[0]), str(args.patch_size[1]), str(args.patch_size[2]),
+        "--learning-rate", str(args.learning_rate),
+        "--weight-decay", str(args.weight_decay),
+        "--num-classes", str(args.num_classes),
+        "--val-fraction", str(args.val_fraction),
+        "--num-workers", str(args.num_workers),
+        "--seed", str(args.seed),
+        "--sliding-window-overlap", str(args.sliding_window_overlap),
+        "--rare-label-idx", str(args.rare_label_idx),
+        "--rare-class-weight", str(args.rare_class_weight),
+        "--oversample-factor", str(args.oversample_factor),
+    ]
+    if getattr(args, "no_amp", False):
+        cmd.append("--no-amp")
+
+    log(f"Custom model training: {' '.join(cmd)}")
+    try:
+        subprocess.run(cmd, check=True, env=env)
+    except subprocess.CalledProcessError:
+        log("Failed custom-train")
+        raise
+
+
 def submit_to_clusterfit(args: argparse.Namespace, env: Dict[str, str]) -> None:
     SlurmJobSubmitter, _, build_slurm_config_from_args = import_clusterfit_helpers()
     
@@ -909,6 +985,9 @@ def main() -> None:
     if args.command == "predict-tree":
         run_predict_tree(args, env)
     # ---------------------------------
+
+    if args.command == "custom-train":
+        run_custom_train(args, env)
 
     log(f"Done in {int(time.perf_counter() - started)}s")
 
