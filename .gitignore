@@ -1,8 +1,3 @@
-# Data directories
-src/ground_truth/*
-src/png/*
-src/output/*
-src/ground_truth/*
 # Python
 __pycache__/
 *.py[cod]
@@ -13,18 +8,13 @@ __pycache__/
 dist/
 build/
 .eggs/
-src/nn_UNet/Dataset*
-src/nn_UNet/nnunnet_data/*
-src/nn_UNet/nnunet_data/
 
-.temp_extract/
-.env
 # Virtual environments
 .venv/
 venv/
 ENV/
 env/
-datasets/*
+
 # IDEs
 .vscode/
 .idea/
@@ -46,12 +36,20 @@ htmlcov/
 *.log
 *.tmp
 temp_*/
-*.nii *.nii.gz
-*.nii *.nii.gz
+.temp_extract/
+.env
 
-src/cvat_exports/*
-src/nn_UNet/predictions/*
-src/nn_UNet/nnunet_data/nnUNet_preprocessed/*
-src/nn_UNet/nnunet_data/nnUNet_raw/*
-src/nn_UNet/nnunet_data/nnUNet_results/*
+# Medical imaging / large artifacts
+*.nii
+*.nii.gz
 *.png
+Task006_Lung.zip
+
+# Project data directories (keep local, do not track)
+datasets/
+src/ground_truth/
+src/png/
+src/output/
+src/cvat_exports/
+src/nn_UNet/predictions/
+src/nn_UNet/nnunet_data/
