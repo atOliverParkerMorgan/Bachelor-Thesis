@@ -20,7 +20,6 @@ from __future__ import annotations
 
 import os
 import pickle
-from collections.abc import MutableMapping
 from pathlib import Path
 
 import numpy as np
@@ -28,47 +27,45 @@ import torch
 import torch.nn as nn
 
 from nnunetv2.training.nnUNetTrainer.nnUNetTrainer import nnUNetTrainer
+from nnunetv2.training.loss.robust_ce_loss import RobustCrossEntropyLoss
 
 
 # ── helpers used by nnUNetTrainerRareClassBoostWandb ────────────────────────
 
 
-class _RareClassFocusedDataset(MutableMapping):
+class _RareClassFocusedDataset:
     """
-    Thin proxy around an nnUNetDataset.
+    Thin proxy around any nnUNetBaseDataset subclass
+    (nnUNetDatasetBlosc2, nnUNetDatasetNumpy, …).
 
-    For keys that contain '__rare_boost_' (inserted by case-level oversampling),
-    the class_locations dict returned by load_case is narrowed to only the rare
-    label index.  The nnU-Net DataLoader passes class_locations to get_bbox when
-    doing foreground-oversampled patch sampling, so narrowing it forces every
-    boost-case patch to be centred on a rare-class voxel instead of any random
-    foreground voxel.
+    nnUNetDataLoader reads case identifiers from data.identifiers (a plain list,
+    set at DataLoader.__init__ line 46: self.indices = data.identifiers) and
+    loads cases via data.load_case(identifier).  This wrapper:
 
-    All other keys pass through without modification.
+      - Exposes an identifiers list that includes '__rare_boost_N' suffixed
+        duplicates of rare-class cases (already appended to the underlying
+        dataset's identifiers by _duplicate_rare_class_cases before wrapping).
+      - Overrides load_case so that for any boost key the suffix is stripped
+        to load the real data, and class_locations in the returned properties
+        is narrowed to only the rare label — forcing the DataLoader's foreground
+        oversampling (get_bbox) to centre every boost-case patch on a rare-class
+        voxel instead of a random foreground class.
     """
 
     def __init__(self, dataset, rare_label_idx: int) -> None:
         self._dataset = dataset
         self.rare_label_idx = rare_label_idx
+        # Copy identifiers so we own the list; boost keys were already appended
+        # to dataset.identifiers before this wrapper was created.
+        self.identifiers = list(dataset.identifiers)
 
-    # ── MutableMapping required interface ────────────────────────────────────
-    def __getitem__(self, key):        return self._dataset[key]
-    def __setitem__(self, key, value): self._dataset[key] = value
-    def __delitem__(self, key):        del self._dataset[key]
-    def __iter__(self):                return iter(self._dataset)
-    def __len__(self):                 return len(self._dataset)
+    def load_case(self, identifier: str):
+        is_boost = "__rare_boost_" in str(identifier)
+        base_id  = identifier.split("__rare_boost_")[0] if is_boost else identifier
 
-    def __getattr__(self, name):
-        # Delegate any attribute not explicitly defined here to the underlying
-        # dataset (covers dataset_path, folder_with_segs_from_prev_stage, etc.)
-        return getattr(self._dataset, name)
+        data, seg, seg_prev, props = self._dataset.load_case(base_id)
 
-    # ── patched load_case ────────────────────────────────────────────────────
-    def load_case(self, key: str):
-        # nnUNetDataset.load_case returns (data, seg, seg_prev, properties)
-        data, seg, seg_prev, props = self._dataset.load_case(key)
-
-        if "__rare_boost_" in str(key):
+        if is_boost:
             locs = props.get("class_locations", {})
             if self.rare_label_idx in locs and len(locs[self.rare_label_idx]) > 0:
                 props = dict(props)
@@ -77,6 +74,13 @@ class _RareClassFocusedDataset(MutableMapping):
                 }
 
         return data, seg, seg_prev, props
+
+    def __getitem__(self, identifier):
+        return self.load_case(identifier)
+
+    def __getattr__(self, name):
+        # Delegate source_folder, folder_with_segs_from_previous_stage, etc.
+        return getattr(self._dataset, name)
 
 
 class _RareClassBinaryDice(nn.Module):
@@ -407,7 +411,7 @@ class nnUNetTrainerRareClassBoostWandb(nnUNetTrainerWandb):
         contain RARE_LABEL_IDX, then add CASE_OVERSAMPLE_FACTOR duplicate
         entries for each such case in self.dataset_tr.
 
-        nnUNet's DataLoader samples uniformly from dataset_tr.keys(), so
+        nnUNet's DataLoader samples uniformly from dataset_tr.identifiers, so
         adding duplicates increases the chance those cases appear in a batch.
         Each duplicate value points to the SAME preprocessed files, so no
         disk space is wasted.
@@ -418,23 +422,23 @@ class nnUNetTrainerRareClassBoostWandb(nnUNetTrainerWandb):
             )
             return
 
-        rare_keys = []
-        for key in list(self.dataset_tr.keys()):
+        rare_ids = []
+        for identifier in list(self.dataset_tr.identifiers):
             try:
                 # Each case has a .pkl with 'class_locations': {label_idx: coords, ...}
                 # nnUNet builds this during fingerprinting / preprocessing.
-                props = self._load_case_properties(key)
+                props = self._load_case_properties(identifier)
                 if props is None:
                     continue
                 locs = props.get("class_locations", {})
                 if self.RARE_LABEL_IDX in locs and len(locs[self.RARE_LABEL_IDX]) > 0:
-                    rare_keys.append(key)
+                    rare_ids.append(identifier)
             except Exception as e:
                 self.print_to_log_file(
-                    f"RareClassBoost: could not read properties for {key}: {e}"
+                    f"RareClassBoost: could not read properties for {identifier}: {e}"
                 )
 
-        if not rare_keys:
+        if not rare_ids:
             self.print_to_log_file(
                 f"RareClassBoost: no training cases found with label {self.RARE_LABEL_IDX}. "
                 "Falling back to loss-weight and oversample-percent only."
@@ -442,37 +446,25 @@ class nnUNetTrainerRareClassBoostWandb(nnUNetTrainerWandb):
             return
 
         n_added = 0
-        for key in rare_keys:
-            original_entry = self.dataset_tr[key]   # the value dict with file paths
+        for identifier in rare_ids:
             for i in range(self.CASE_OVERSAMPLE_FACTOR):
-                dup_key = f"{key}__rare_boost_{i}"
-                self.dataset_tr[dup_key] = original_entry
+                self.dataset_tr.identifiers.append(f"{identifier}__rare_boost_{i}")
                 n_added += 1
 
         self.print_to_log_file(
-            f"RareClassBoost: found {len(rare_keys)} case(s) with "
+            f"RareClassBoost: found {len(rare_ids)} case(s) with "
             f"label {self.RARE_LABEL_IDX} (poskozeni_hmyzem). "
             f"Added {n_added} duplicate entries → "
-            f"total training cases: {len(self.dataset_tr)}"
+            f"total training cases: {len(self.dataset_tr.identifiers)}"
         )
 
-    def _load_case_properties(self, key: str) -> dict | None:
+    def _load_case_properties(self, identifier: str) -> dict | None:
         """Load the .pkl properties file for a training case."""
-        # nnUNet stores properties alongside the preprocessed .npz/.npy files.
-        # The exact path depends on the configuration (3d_fullres, etc.).
-        entry = self.dataset_tr[key]
-
-        # Try the 'properties_file' field first (standard nnUNet v2 layout)
-        pkl_path = entry.get("properties_file") if isinstance(entry, dict) else None
-        if pkl_path is None:
-            # Fallback: derive path from the data file path
-            data_path = entry.get("data_file") if isinstance(entry, dict) else None
-            if data_path is not None:
-                pkl_path = Path(str(data_path)).with_suffix("").with_suffix(".pkl")
-
-        if pkl_path is None or not Path(pkl_path).exists():
+        if not hasattr(self.dataset_tr, 'source_folder'):
             return None
-
+        pkl_path = os.path.join(self.dataset_tr.source_folder, identifier + '.pkl')
+        if not os.path.exists(pkl_path):
+            return None
         with open(pkl_path, "rb") as f:
             return pickle.load(f)
 
@@ -510,7 +502,7 @@ class nnUNetTrainerRareClassBoostWandb(nnUNetTrainerWandb):
                 # is on the same device as the network output tensors.
                 weights    = weights.to(self.device)
                 ignore_idx = getattr(dc_ce.ce, "ignore_index", -100)
-                dc_ce.ce   = torch.nn.CrossEntropyLoss(
+                dc_ce.ce   = RobustCrossEntropyLoss(
                     weight=weights, ignore_index=ignore_idx
                 )
                 self.print_to_log_file(
