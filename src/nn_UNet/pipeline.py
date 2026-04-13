@@ -115,6 +115,16 @@ def apply_runtime_env_overrides(env: Dict[str, str], args: argparse.Namespace) -
     if pretrained_weights is not None:
         env["NNUNET_PRETRAINED_WEIGHTS"] = str(Path(pretrained_weights).resolve())
 
+    wandb_project = getattr(args, "wandb_project", None)
+    if wandb_project:
+        env["WANDB_PROJECT"] = wandb_project
+    wandb_entity = getattr(args, "wandb_entity", None)
+    if wandb_entity:
+        env["WANDB_ENTITY"] = wandb_entity
+    wandb_run_name = getattr(args, "wandb_run_name", None)
+    if wandb_run_name:
+        env["WANDB_RUN_NAME"] = wandb_run_name
+
     n_proc_da = getattr(args, "n_proc_da", None)
     if n_proc_da is not None:
         env["nnUNet_n_proc_DA"] = str(n_proc_da)
@@ -346,20 +356,15 @@ def detect_gpu_vram_gb() -> float | None:
         return None
 
 
-def install_custom_trainer_to_nnunetv2() -> bool:
-    """Copy nnUNetTrainerLungPretrained into nnunetv2's trainer variants directory.
-
-    nnUNetv2_train discovers trainers by searching recursively inside the
-    nnunetv2 package.  Copying the file there is the standard way to register
-    a custom trainer without modifying the package.  Returns True on success.
-    """
+def _install_trainer_file(filename: str) -> bool:
+    """Copy a custom trainer file into nnunetv2's trainer variants directory."""
     try:
         import nnunetv2
     except ImportError:
         log("Warning: nnunetv2 not importable — cannot install custom trainer.")
         return False
 
-    trainer_source = Path(__file__).parent / "nnunet_trainer_pretrained.py"
+    trainer_source = Path(__file__).parent / filename
     if not trainer_source.exists():
         raise FileNotFoundError(f"Custom trainer source not found: {trainer_source}")
 
@@ -371,6 +376,16 @@ def install_custom_trainer_to_nnunetv2() -> bool:
         shutil.copy2(trainer_source, dest)
         log(f"Installed custom trainer to: {dest}")
     return True
+
+
+def install_custom_trainer_to_nnunetv2() -> bool:
+    """Install nnUNetTrainerLungPretrained into nnunetv2."""
+    return _install_trainer_file("nnunet_trainer_pretrained.py")
+
+
+def install_wandb_trainer_to_nnunetv2() -> bool:
+    """Install nnUNetTrainerWandb / nnUNetTrainerLungPretrainedWandb into nnunetv2."""
+    return _install_trainer_file("nnunet_trainer_wandb.py")
 
 
 def prediction_worker_profile(vram_gb: float | None) -> tuple[int, int]:
@@ -463,6 +478,10 @@ def build_parser() -> argparse.ArgumentParser:
             "Install the Lung zip first: nnUNetv2_install_pretrained_model_from_zip Task006_Lung.zip"
         ),
     )
+    train.add_argument("--wandb", action="store_true", help="Enable Weights & Biases logging.")
+    train.add_argument("--wandb-project", default="nnunet-training", metavar="PROJECT", help="W&B project name (default: nnunet-training).")
+    train.add_argument("--wandb-entity", default=None, metavar="ENTITY", help="W&B entity / team name.")
+    train.add_argument("--wandb-run-name", default=None, metavar="NAME", help="Display name for this W&B run.")
     add_clusterfit_arguments(train)
 
     predict = subparsers.add_parser("predict", help="Run nnU-Net inference")
@@ -470,6 +489,10 @@ def build_parser() -> argparse.ArgumentParser:
     predict.add_argument("--output", type=Path, required=True)
     predict.add_argument("--configuration", default="3d_fullres")
     predict.add_argument("--fold", default="0", help="Fold index or 'all'")
+    predict.add_argument("--trainer", default=None,
+                         help="Trainer class name used during training "
+                              "(default: nnUNetTrainerRareClassBoostWandb). "
+                              "Must match the trainer used to train the model.")
     add_hidden_legacy_planner_args(predict)
     predict.add_argument("--plans-identifier", default=None)
     add_clusterfit_arguments(predict)
@@ -482,6 +505,9 @@ def build_parser() -> argparse.ArgumentParser:
     predict_tree.add_argument("--configuration", default="3d_fullres")
     predict_tree.add_argument("--fold", default="0", help="Fold index")
     predict_tree.add_argument("--make-datumaro", action="store_true", help="Convert NIfTI outputs to Datumaro format")
+    predict_tree.add_argument("--trainer", default=None,
+                              help="Trainer class name used during training "
+                                   "(default: nnUNetTrainerRareClassBoostWandb).")
     add_hidden_legacy_planner_args(predict_tree)
     predict_tree.add_argument("--plans-identifier", default=None)
     add_clusterfit_arguments(predict_tree)
@@ -510,6 +536,10 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="CHECKPOINT",
         help="Path to pretrained checkpoint; enables nnUNetTrainerLungPretrained.",
     )
+    all_cmd.add_argument("--wandb", action="store_true", help="Enable Weights & Biases logging.")
+    all_cmd.add_argument("--wandb-project", default="nnunet-training", metavar="PROJECT")
+    all_cmd.add_argument("--wandb-entity", default=None, metavar="ENTITY")
+    all_cmd.add_argument("--wandb-run-name", default=None, metavar="NAME")
     all_cmd.add_argument("--plan-configurations", nargs="+", default=["3d_fullres"])
     all_cmd.add_argument("--plan-num-processes", type=int, default=1)
     add_clusterfit_arguments(all_cmd)
@@ -551,18 +581,30 @@ def run_train(args: argparse.Namespace, env: Dict[str, str]) -> None:
         plans_identifier=plans_identifier,
     )
 
-    # Determine trainer — pretrained-weights triggers the custom transfer trainer
-    # unless the user has explicitly chosen a different one.
+    # Determine trainer based on --pretrained-weights and --wandb flags.
     pretrained_weights = getattr(args, "pretrained_weights", None)
+    use_wandb = getattr(args, "wandb", False)
     trainer = getattr(args, "trainer", None)
-    if pretrained_weights and not trainer:
-        trainer = "nnUNetTrainerLungPretrained"
-        if not install_custom_trainer_to_nnunetv2():
-            log(
-                "Warning: custom trainer installation failed. "
-                "Falling back to base nnUNetTrainer with built-in --pretrained_weights."
-            )
-            trainer = None
+    if not trainer:
+        if pretrained_weights and use_wandb:
+            trainer = "nnUNetTrainerRareClassBoostLungPretrainedWandb"
+            if not install_wandb_trainer_to_nnunetv2():
+                log("Warning: wandb trainer installation failed — falling back to LungPretrained.")
+                trainer = "nnUNetTrainerLungPretrained"
+                install_custom_trainer_to_nnunetv2()
+        elif pretrained_weights:
+            trainer = "nnUNetTrainerLungPretrained"
+            if not install_custom_trainer_to_nnunetv2():
+                log(
+                    "Warning: custom trainer installation failed. "
+                    "Falling back to base nnUNetTrainer with built-in --pretrained_weights."
+                )
+                trainer = None
+        elif use_wandb:
+            trainer = "nnUNetTrainerRareClassBoostWandb"
+            if not install_wandb_trainer_to_nnunetv2():
+                log("Warning: wandb trainer installation failed — training without W&B.")
+                trainer = None
 
     cmd = [
         "nnUNetv2_train",
@@ -644,6 +686,7 @@ def run_predict(args: argparse.Namespace, env: Dict[str, str]) -> None:
         active_input = input_path
 
     plans_identifier = resolve_plans_identifier(args)
+    trainer = getattr(args, "trainer", None) or "nnUNetTrainerRareClassBoostWandb"
     checkpoint_name = resolve_prediction_checkpoint(
         nnunet_root=args.nnunet_root,
         dataset_id=args.dataset_id,
@@ -651,6 +694,7 @@ def run_predict(args: argparse.Namespace, env: Dict[str, str]) -> None:
         configuration=args.configuration,
         plans_identifier=plans_identifier,
         fold=str(args.fold),
+        trainer=trainer,
     )
 
     cmd = [
@@ -661,10 +705,12 @@ def run_predict(args: argparse.Namespace, env: Dict[str, str]) -> None:
         "-c", args.configuration,
         "-f", str(args.fold),
         "-p", plans_identifier,
+        "-tr", trainer,
     ]
     if checkpoint_name is not None:
         cmd.extend(["-chk", checkpoint_name])
         log(f"Using prediction checkpoint: {checkpoint_name}")
+    log(f"Using trainer: {trainer}")
 
     vram_gb = detect_gpu_vram_gb()
     npp, nps = prediction_worker_profile(vram_gb)

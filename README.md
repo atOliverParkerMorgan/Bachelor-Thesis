@@ -152,7 +152,8 @@ Use the same commands with cluster flags.
 	--compile off \
 	--n-proc-da 4 \
 	--cpu-threads 1 \
-	--fold 4
+	--fold 0
+	
 ```
 
 If training appears stuck before epoch logs on `3d_fullres`, use this safer command:
@@ -186,7 +187,13 @@ nnUNetv2_install_pretrained_model_from_zip Task006_Lung.zip
 # $nnUNet_results/Dataset006_Lung/nnUNetTrainer__nnUNetPlans__3d_fullres/fold_0/checkpoint_final.pth
 ```
 
-**Train with pretrained weights (best parameters for this dataset):**
+**Get dataset statistics**
+```bash
+poetry run python src/nn_UNet/label_stats.py ./src/nn_UNet/nnunet_data/nnUNet_raw/Dataset001_BPWoodDefects/labelsTr  --csv stats.csv
+```
+
+**Train with pretrained weights and W&B logging (best parameters for this dataset):**
+
 
 ```bash
 ./run_nnunet train \
@@ -201,8 +208,12 @@ nnUNetv2_install_pretrained_model_from_zip Task006_Lung.zip
     --n-proc-da 4 \
     --cpu-threads 1 \
     --initial-lr 1e-3 \
-    --pretrained-weights $nnUNet_results/Dataset006_Lung/nnUNetTrainer__nnUNetPlans__3d_fullres/fold_0/checkpoint_final.pth
+    --pretrained-weights $nnUNet_results/3d_fullres/Task006_Lung/nnUNetTrainerV2__nnUNetPlansv2.1/fold_0/model_final_checkpoint.model \
+    --wandb \
+    --wandb-project "bp-wood-defects" \
+    --wandb-entity "oliver-parker-morgan-czech-technical-university-in-prague"
 ```
+
 
 **Why these parameters:**
 
@@ -220,6 +231,38 @@ The pipeline automatically:
    `nnUNetv2_train -tr nnUNetTrainerLungPretrained` can discover it.
 2. Passes the checkpoint path via `NNUNET_PRETRAINED_WEIGHTS`.
 3. Falls back to nnUNetv2's built-in `--pretrained_weights` if the copy fails.
+
+## 6) Custom 3D model
+
+The custom trainer now uses a 3-D MONAI U-Net with settings chosen to stay close to the nnU-Net `3d_fullres` configuration:
+
+- patch size: `128 384 128`
+- batch size: `2`
+- optimizer: `AdamW`
+- learning rate: `1e-3`
+- weight decay: `1e-5`
+- scheduler: cosine annealing
+- epochs: `1000`
+- classes: `7`
+- intensity clipping: `[-1000, 3000]` mapped to `[0, 1]`
+
+Run it with the raw nnU-Net volumes:
+
+```bash
+poetry run python -m src.custom_model.train \
+	--image-dir ./src/nn_UNet/nnunet_data/nnUNet_raw/Dataset001_BPWoodDefects/imagesTr \
+	--label-dir ./src/nn_UNet/nnunet_data/nnUNet_raw/Dataset001_BPWoodDefects/labelsTr \
+	--output-dir ./output/custom_model \
+	--epochs 1000 \
+	--batch-size 2 \
+	--patch-size 128 384 128 \
+	--learning-rate 1e-3 \
+	--weight-decay 1e-5 \
+	--num-classes 7 \
+	--val-fraction 0.25
+```
+
+The trainer writes `best_model.pth`, `last_model.pth`, and the resolved config JSON into the output directory.
 
 ### Predict on cluster
 

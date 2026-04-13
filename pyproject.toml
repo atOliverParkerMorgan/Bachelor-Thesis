@@ -12,6 +12,7 @@ pydicom = "^2.4"
 Pillow = "^10.0"
 numpy = "1.26.4"
 SimpleITK = "^2.3"
+nibabel = "^5.4"
 improutils = "^1.2.1"
 tqdm = "^4.66"
 pycocotools = "^2.0.11"
@@ -22,6 +23,7 @@ dotenv = "^0.9.9"
 requests-toolbelt = "^1.0.0"
 cvat-sdk = "^2.60.0"
 nnunetv2 = "^2.6.2"
+monai = "^1.5.2"
 torch = {version = "2.6.0+cu124", source = "pytorch-cu124"}
 torchvision = {version = "0.21.0+cu124", source = "pytorch-cu124"}
 torchaudio = {version = "2.6.0+cu124", source = "pytorch-cu124"}

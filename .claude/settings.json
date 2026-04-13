@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -c ':*)",
+      "Bash(python src/nn_UNet/label_stats.py --max-files 2)",
+      "Bash(python -c \"import ast; ast.parse\\(open\\('src/nn_UNet/nnunet_trainer_wandb.py'\\).read\\(\\)\\); print\\('syntax OK'\\)\")",
+      "Bash(poetry run:*)"
+    ]
+  }
+}

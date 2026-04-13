@@ -3,6 +3,7 @@ pydicom>=2.4,<3.0
 Pillow>=10.0,<11.0
 numpy==1.26.4
 SimpleITK>=2.3,<3.0
+nibabel>=5.4,<6.0
 improutils>=1.2.1,<2.0
 tqdm>=4.66,<5.0
 
@@ -26,6 +27,7 @@ torchaudio==2.6.0+cu124
 
 # nnU-Net
 nnunetv2>=2.6.2,<3.0
+monai>=1.5,<2.0
 
 # Computer vision
 opencv-python==4.9.0.80
