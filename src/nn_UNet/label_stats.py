@@ -47,13 +47,13 @@ if str(PROJECT_ROOT) not in sys.path:
 # ── label map — index → name, must match the voxel values in your .nii.gz files ──
 # Raw dataset.json has {"name": index}, so this is the inverted version.
 LABEL_NAMES: Dict[int, str] = {
-    0: "pozadi",
-    1: "zdrave_drevo",
+    0: "Pozadí",
+    1: "Zdravé dřevo",
     2: "suk",
-    3: "hniloba",
-    4: "kura",
-    5: "trhlina",
-    6: "poskozeni_hmyzem",
+    3: "Hniloba",
+    4: "Kůra",
+    5: "Trhlina",
+    6: "Poškození hmyzem",
 }
 
 DEFAULT_LABELS_DIR = (

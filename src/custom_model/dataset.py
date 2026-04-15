@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import numpy as np
@@ -9,7 +10,7 @@ import SimpleITK as sitk
 class WoodDefectDataset:
     """Dataset of paired NIfTI image/label volumes.
 
-    Cases that contain ``rare_label_idx`` (default 6 = poskozeni_hmyzem) are
+    Cases that contain ``rare_label_idx`` (default 6 = Poškození hmyzem) are
     duplicated ``oversample_factor`` extra times so the DataLoader sees them
     proportionally more often — matching the strategy used by
     nnUNetTrainerRareClassBoostWandb.
@@ -30,11 +31,7 @@ class WoodDefectDataset:
 
         label_root = Path(label_dir)
         for img_path in image_paths:
-            case_name = img_path.name
-            if case_name.endswith("_0000.nii.gz"):
-                label_name = case_name.replace("_0000.nii.gz", ".nii.gz")
-            else:
-                label_name = case_name
+            label_name = self._label_name_from_image_name(img_path.name)
 
             lbl_path = label_root / label_name
             if not lbl_path.exists():
@@ -65,6 +62,17 @@ class WoodDefectDataset:
                     f"[WoodDefectDataset] Warning: no cases found with label "
                     f"{rare_label_idx} — rare-class oversampling skipped."
                 )
+
+    @staticmethod
+    def _label_name_from_image_name(image_name: str) -> str:
+        """Map an nnU-Net image filename back to its label filename."""
+        if image_name.endswith(".nii.gz"):
+            case_name = image_name[:-7]
+        else:
+            case_name = Path(image_name).stem
+
+        case_name = re.sub(r"_0000(?:_\d+)?$", "", case_name)
+        return f"{case_name}.nii.gz"
 
     @staticmethod
     def _has_label(label_path: str, label_idx: int) -> bool:

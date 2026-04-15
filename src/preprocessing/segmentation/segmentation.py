@@ -1,5 +1,6 @@
 import argparse
 import sys
+import unicodedata
 from pathlib import Path
 import cv2
 import numpy as np
@@ -22,10 +23,40 @@ MASK_NAMES = [
     "poskozeni_hmyzem",
 ]
 
+MASK_NAME_ALIASES = {
+    "pozadi": "pozadi",
+    "zdrave drevo": "zdrave_drevo",
+    "suk": "suk",
+    "hniloba": "hniloba",
+    "kura": "kura",
+    "trhlina": "trhlina",
+    "trhilina": "trhlina",
+    "poskozeni hmyzem": "poskozeni_hmyzem",
+    "all": "all",
+}
+
 OUTER_RING_WIDTH_RATIO = 0.03
 OUTER_RING_WIDTH_MIN_PX = 6
 OUTER_RING_WIDTH_MAX_PX = 30
 CRUST_BAND_WIDTH_MULTIPLIER = 2.2
+
+
+def _normalize_label_token(value: str) -> str:
+    normalized = unicodedata.normalize("NFKD", value)
+    ascii_only = "".join(ch for ch in normalized if not unicodedata.combining(ch))
+    return ascii_only.lower().replace("_", " ").strip()
+
+
+def _normalize_requested_masks(raw_masks: list[str]) -> set[str]:
+    normalized: set[str] = set()
+    for raw_name in raw_masks:
+        key = _normalize_label_token(raw_name)
+        mapped = MASK_NAME_ALIASES.get(key)
+        if mapped is None:
+            supported = ", ".join(sorted(MASK_NAMES))
+            raise ValueError(f"Unsupported mask name '{raw_name}'. Supported mask names: {supported} or all")
+        normalized.add(mapped)
+    return normalized
 
 def _to_binary_u8(mask):
     return np.where(mask > 0, 255, 0).astype(np.uint8)
@@ -136,9 +167,8 @@ def build_parser():
     parser.add_argument(
         "--masks", "-m",
         nargs="+",
-        choices=[*MASK_NAMES, "all"],
         default=["all"],
-        help="Masks to generate (default: all)",
+        help="Masks to generate (default: all). Accepts legacy and Czech display names.",
     )
     
     parser.add_argument(
@@ -199,10 +229,12 @@ def main():
         print(f"Removed {len(invalid_files)} invalid log files.")
         return
 
-    if "all" in args.masks:
+    normalized_masks = _normalize_requested_masks(args.masks)
+
+    if "all" in normalized_masks:
         requested_masks = set(MASK_NAMES)
     else:
-        requested_masks = set(args.masks)
+        requested_masks = normalized_masks
 
     print(f"Processing tree {args.tree} masks: {', '.join(sorted(requested_masks))}")
 

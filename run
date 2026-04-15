@@ -64,7 +64,7 @@ while [[ $# -gt 0 ]]; do
             echo "Usage: $0 [OPTIONS]"
             echo ""
             echo "Options:"
-            echo "  --masks, -m MASKS       Masks to generate (comma-separated: pozadi,kura,suk,hniloba,trhlina or 'all')"
+            echo "  --masks, -m MASKS       Masks to generate (comma-separated internal keys: pozadi,kura,suk,hniloba,trhlina or 'all'; Czech labels are also accepted by segmentation)"
             echo "  --tree, -t TREE         Process only one tree (for example: dub5)"
             echo "  --skip-extract          Skip extraction step if PNG files already exist"
             echo "  --skip-convert          Skip IMA to PNG conversion step"

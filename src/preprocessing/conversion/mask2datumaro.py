@@ -2,6 +2,9 @@ import argparse
 import logging
 import shutil
 from pathlib import Path
+import gc
+import tempfile
+import time
 
 
 def export_prediction_masks_conversion(
@@ -45,18 +48,29 @@ DEFAULT_FOLDER_TO_ID = {
     "poskozeni_hmyzem": 6,
 }
 DEFAULT_LABEL_NAMES = [
-    "pozadi",
-    "zdrave_drevo",
-    "suk",
-    "hniloba",
-    "kura",
-    "trhlina",
-    "poskozeni_hmyzem",
+    "Pozadí",
+    "Zdravé dřevo",
+    "Suk",
+    "Hniloba",
+    "Kůra",
+    "Trhlina",
+    "Poškození hmyzem",
 ]
 
 
 class DatasetItemsIterable:
-    def __init__(self, mask_files, ref_dir, images_dir, masks_dir, folder_to_id, subset, item_id_mode):
+    def __init__(
+        self,
+        mask_files,
+        ref_dir,
+        images_dir,
+        masks_dir,
+        folder_to_id,
+        subset,
+        item_id_mode,
+        use_flat_masks=False,
+        encoded_value_to_label_id=None,
+    ):
         self.mask_files = mask_files
         self.ref_dir = ref_dir
         self.images_dir = images_dir
@@ -64,6 +78,8 @@ class DatasetItemsIterable:
         self.folder_to_id = folder_to_id
         self.subset = subset
         self.item_id_mode = item_id_mode
+        self.use_flat_masks = use_flat_masks
+        self.encoded_value_to_label_id = encoded_value_to_label_id
 
     def __iter__(self):
         return iter_dataset_items(
@@ -74,6 +90,8 @@ class DatasetItemsIterable:
             folder_to_id=self.folder_to_id,
             subset=self.subset,
             item_id_mode=self.item_id_mode,
+            use_flat_masks=self.use_flat_masks,
+            encoded_value_to_label_id=self.encoded_value_to_label_id,
         )
 
 
@@ -89,7 +107,17 @@ def _build_item_id(rel_path: Path, mode: str) -> str:
     raise ValueError(f"Unsupported item id mode: {mode}")
 
 
-def iter_dataset_items(mask_files, ref_dir, images_dir, masks_dir, folder_to_id, subset, item_id_mode):
+def iter_dataset_items(
+    mask_files,
+    ref_dir,
+    images_dir,
+    masks_dir,
+    folder_to_id,
+    subset,
+    item_id_mode,
+    use_flat_masks=False,
+    encoded_value_to_label_id=None,
+):
     for bg_mask_path in tqdm(mask_files, desc="Building Dataset"):
         rel_path = bg_mask_path.relative_to(ref_dir)
         item_id = _build_item_id(rel_path, item_id_mode)
@@ -106,39 +134,74 @@ def iter_dataset_items(mask_files, ref_dir, images_dir, masks_dir, folder_to_id,
 
         item_annotations = []
 
-        for folder, label_id in folder_to_id.items():
-            if label_id == 0:
-                continue
-            # --------------------
-
-            mask_file = masks_dir / folder / rel_path
-            if not mask_file.exists():
+        if use_flat_masks:
+            mask_img = cv2.imread(str(bg_mask_path), cv2.IMREAD_GRAYSCALE)
+            if mask_img is None:
                 continue
 
-            mask_img = cv2.imread(str(mask_file), cv2.IMREAD_GRAYSCALE)
-            if mask_img is None or not np.any(mask_img > 0):
-                continue
+            # Build a mapping from encoded values to label IDs if needed
+            if encoded_value_to_label_id is None:
+                unique_vals = sorted(np.unique(mask_img))
+                label_ids = sorted(set(folder_to_id.values()))
+                encoded_value_to_label_id = {v: label_ids[i % len(label_ids)] for i, v in enumerate(unique_vals)}
 
-            mask_img = (
-                (mask_img > 127).astype(np.uint8) if mask_img.max() > 1 else mask_img
-            )
+            # Flat mode: decode encoded mask values and convert to class masks
+            for encoded_value, label_id in encoded_value_to_label_id.items():
+                if label_id == 0:  # Skip background
+                    continue
 
-            num_labels, labels_im = cv2.connectedComponents(mask_img)
+                class_mask = (mask_img == encoded_value).astype(np.uint8)
+                if not np.any(class_mask):
+                    continue
 
-            for component_id in range(1, num_labels):
-                instance_mask = (labels_im == component_id).astype(np.uint8)
-                
-                # Z-order is safely incremented only for actual defects now
-                current_z_order = len(item_annotations) + 1
+                num_labels, labels_im = cv2.connectedComponents(class_mask)
 
-                item_annotations.append(
-                    Mask(
-                        image=instance_mask,
-                        label=label_id,
-                        group=component_id,
-                        z_order=current_z_order,
+                for component_id in range(1, num_labels):
+                    instance_mask = (labels_im == component_id).astype(np.uint8)
+
+                    current_z_order = len(item_annotations) + 1
+
+                    item_annotations.append(
+                        Mask(
+                            image=instance_mask,
+                            label=label_id,
+                            group=component_id,
+                            z_order=current_z_order,
+                        )
                     )
+        else:
+            for folder, label_id in folder_to_id.items():
+                if label_id == 0:
+                    continue
+
+                mask_file = masks_dir / folder / rel_path
+                if not mask_file.exists():
+                    continue
+
+                mask_img = cv2.imread(str(mask_file), cv2.IMREAD_GRAYSCALE)
+                if mask_img is None or not np.any(mask_img > 0):
+                    continue
+
+                mask_img = (
+                    (mask_img > 127).astype(np.uint8) if mask_img.max() > 1 else mask_img
                 )
+
+                num_labels, labels_im = cv2.connectedComponents(mask_img)
+
+                for component_id in range(1, num_labels):
+                    instance_mask = (labels_im == component_id).astype(np.uint8)
+
+                    # Z-order is safely incremented only for actual defects now
+                    current_z_order = len(item_annotations) + 1
+
+                    item_annotations.append(
+                        Mask(
+                            image=instance_mask,
+                            label=label_id,
+                            group=component_id,
+                            z_order=current_z_order,
+                        )
+                    )
 
         yield DatasetItem(
             id=item_id,
@@ -162,7 +225,7 @@ def export_datumaro_dataset(
 
     label_cat = LabelCategories()
     for label_name in label_names:
-        # This keeps "Pozadi" at ID 0 so all subsequent IDs align properly.
+        # Keep background at ID 0 so all subsequent IDs align properly.
         label_cat.add(label_name)
 
     categories = {AnnotationType.label: label_cat}
@@ -175,16 +238,49 @@ def export_datumaro_dataset(
         raise FileNotFoundError(f"Missing images directory: {images_dir}")
 
     available_masks = [folder for folder in folder_to_id if (masks_dir / folder).exists()]
-    if not available_masks:
-        raise FileNotFoundError(f"No mask folders found in {masks_dir}")
+    use_flat_masks = False
 
-    print(f"Found mask types: {', '.join(available_masks)}")
-    ref_dir = masks_dir / available_masks[0]
-    mask_files = sorted(ref_dir.glob("*.png"))
-    if not mask_files:
-        mask_files = sorted(ref_dir.rglob("*.png"))
+    if available_masks:
+        print(f"Found mask types: {', '.join(available_masks)}")
+        ref_dir = masks_dir / available_masks[0]
+        mask_files = sorted(ref_dir.glob("*.png"))
+        if not mask_files:
+            mask_files = sorted(ref_dir.rglob("*.png"))
+    else:
+        # Fallback: masks are stored directly under masks/ as label-indexed images.
+        use_flat_masks = True
+        ref_dir = masks_dir
+        mask_files = sorted(ref_dir.glob("*.png"))
+        if not mask_files:
+            mask_files = sorted(ref_dir.rglob("*.png"))
+
+        if not mask_files:
+            raise FileNotFoundError(
+                f"No mask folders and no PNG masks found in {masks_dir}"
+            )
+
+        print(
+            "No class subfolders found in masks/. Using flat label-indexed masks fallback."
+        )
 
     print(f"Processing {len(mask_files)} images...")
+
+    # If using flat masks, detect the pixel value to label ID encoding
+    encoded_value_to_label_id = None
+    if use_flat_masks and mask_files:
+        # Sample the first mask to detect encoding
+        sample_mask = cv2.imread(str(mask_files[0]), cv2.IMREAD_GRAYSCALE)
+        if sample_mask is not None:
+            unique_vals = sorted(np.unique(sample_mask))
+            label_ids = sorted(set(folder_to_id.values()))
+            
+            # Map unique pixel values to label IDs in order
+            if len(unique_vals) == len(label_ids):
+                encoded_value_to_label_id = {v: label_ids[i] for i, v in enumerate(unique_vals)}
+                print(f"Detected encoding: {dict(sorted(encoded_value_to_label_id.items()))}")
+            else:
+                print(f"Warning: Found {len(unique_vals)} unique values but {len(label_ids)} label IDs. Auto-mapping...")
+                encoded_value_to_label_id = {v: label_ids[i % len(label_ids)] for i, v in enumerate(unique_vals)}
 
     dataset = Dataset.from_iterable(
         DatasetItemsIterable(
@@ -195,14 +291,20 @@ def export_datumaro_dataset(
             folder_to_id=folder_to_id,
             subset=task_name,
             item_id_mode=item_id_mode,
+            use_flat_masks=use_flat_masks,
+            encoded_value_to_label_id=encoded_value_to_label_id,
         ),
         categories=categories,
     )
 
     print("Exporting dataset to Datumaro format...")
-    temp_dir = output.parent / "temp_datumaro_lib_export"
-    if temp_dir.exists():
-        shutil.rmtree(temp_dir)
+    temp_dir = Path(
+        tempfile.mkdtemp(prefix="temp_datumaro_lib_export_", dir=str(output.parent))
+    )
+    
+    # Pre-create the directory structure Datumaro expects
+    temp_dir.mkdir(parents=True, exist_ok=True)
+    (temp_dir / "annotations").mkdir(parents=True, exist_ok=True)
 
     try:
         dataset.export(save_dir=str(temp_dir), format="datumaro", save_media=save_media)
@@ -212,7 +314,24 @@ def export_datumaro_dataset(
         return output
     finally:
         if temp_dir.exists():
-            shutil.rmtree(temp_dir)
+            # Force garbage collection before cleanup to release file handles
+            gc.collect()
+            time.sleep(0.5)
+            
+            # Retry deletion on Windows file locking
+            max_retries = 3
+            for attempt in range(max_retries):
+                try:
+                    shutil.rmtree(temp_dir)
+                    break
+                except PermissionError as e:
+                    if attempt < max_retries - 1:
+                        print(f"Warning: File lock on cleanup (attempt {attempt + 1}/{max_retries}), retrying...")
+                        time.sleep(1)
+                    else:
+                        print(f"Warning: Could not clean up temp directory {temp_dir}: {e}")
+                        # Do not fail export because temp cleanup failed.
+                        break
 
 
 def main():
@@ -244,7 +363,7 @@ def main():
         "--label-names",
         nargs=7,
         default=DEFAULT_LABEL_NAMES,
-        help="Labels for pozadi, zdrave_drevo, suk, hniloba, kura, trhlina, poskozeni_hmyzem",
+        help="Labels in class-id order (default: Pozadí, Zdravé dřevo, suk, Hniloba, Kůra, Trhlina, Poškození hmyzem)",
     )
     parser.add_argument(
         "--no-media",

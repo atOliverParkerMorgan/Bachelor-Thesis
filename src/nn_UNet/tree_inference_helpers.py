@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import shutil
+import unicodedata
 import zipfile
 from pathlib import Path
 from typing import Iterable
@@ -16,17 +17,27 @@ from PIL import Image
 from src.processing.conversion.ima2png import process_series
 from src.processing.utils.upload_to_cvat import upload_specific_file
 
+def _normalize_label_token(value: str) -> str:
+    normalized = unicodedata.normalize("NFKD", value)
+    ascii_only = "".join(ch for ch in normalized if not unicodedata.combining(ch))
+    return ascii_only.lower().replace("_", " ").strip()
+
+
 SEGMENTATION_STYLE_LABELS = {
     "pozadi": "pozadi",
-    "zdrave_drevo": "zdrave_drevo",
+    "zdrave drevo": "zdrave_drevo",
     "suk": "suk",
     "hniloba": "hniloba",
     "kura": "kura",
     "trhlina": "trhlina",
-    "poskozeni_hmyzem": "poskozeni_hmyzem",
+    "trhilina": "trhlina",
+    "poskozeni hmyzem": "poskozeni_hmyzem",
 }
-BACKGROUND_LABEL_ALIASES = {"background", "pozadi"}
-HEALTHY_WOOD_LABEL_ALIASES = {"zdrave_drevo", "healthy_wood"}
+BACKGROUND_LABEL_ALIASES = {_normalize_label_token(name) for name in ("background", "pozadi", "Pozadí")}
+HEALTHY_WOOD_LABEL_ALIASES = {
+    _normalize_label_token(name)
+    for name in ("zdrave_drevo", "zdrave drevo", "Zdravé dřevo", "healthy_wood", "healthy wood")
+}
 
 
 def sorted_tree_slices(tree_dir: Path) -> list[Path]:
@@ -205,7 +216,7 @@ def segmentation_style_label_map(dataset_json_path: Path) -> tuple[dict[int, str
     ignored: dict[int, str] = {}
 
     for label_id, label_name in dataset_labels.items():
-        folder_name = SEGMENTATION_STYLE_LABELS.get(label_name.lower())       
+        folder_name = SEGMENTATION_STYLE_LABELS.get(_normalize_label_token(label_name))
         if folder_name is None:
             ignored[label_id] = label_name
             continue
@@ -219,7 +230,7 @@ def _resolve_background_label_ids(dataset_json_path: Path) -> set[int]:
     background_ids = {
         label_id
         for label_id, label_name in dataset_labels.items()
-        if label_name.lower() in BACKGROUND_LABEL_ALIASES
+        if _normalize_label_token(label_name) in BACKGROUND_LABEL_ALIASES
     }
     # nnU-Net convention: class 0 is background.
     background_ids.add(0)
@@ -231,7 +242,7 @@ def _resolve_healthy_label_ids(dataset_json_path: Path) -> set[int]:
     return {
         label_id
         for label_id, label_name in dataset_labels.items()
-        if label_name.lower() in HEALTHY_WOOD_LABEL_ALIASES
+        if _normalize_label_token(label_name) in HEALTHY_WOOD_LABEL_ALIASES
     }
 
 
@@ -240,8 +251,8 @@ def _resolve_defect_label_ids(dataset_json_path: Path) -> set[int]:
     return {
         label_id
         for label_id, label_name in dataset_labels.items()
-        if label_name.lower() not in BACKGROUND_LABEL_ALIASES
-        and label_name.lower() not in HEALTHY_WOOD_LABEL_ALIASES
+        if _normalize_label_token(label_name) not in BACKGROUND_LABEL_ALIASES
+        and _normalize_label_token(label_name) not in HEALTHY_WOOD_LABEL_ALIASES
     }
 
 

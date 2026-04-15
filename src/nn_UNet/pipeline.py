@@ -635,7 +635,7 @@ def build_parser() -> argparse.ArgumentParser:
     custom_train_p.add_argument("--sliding-window-overlap", type=float, default=0.5)
     custom_train_p.add_argument(
         "--rare-label-idx", type=int, default=6,
-        help="Label index to boost (default: 6 = poskozeni_hmyzem).",
+        help="Label index to boost (default: 6 = Poškození hmyzem).",
     )
     custom_train_p.add_argument(
         "--rare-class-weight", type=float, default=30.0,

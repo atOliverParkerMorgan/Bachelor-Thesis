@@ -235,7 +235,7 @@ The pipeline automatically:
 ## 6) Custom 3D model (SwinUNETR)
 
 The custom trainer uses a 3-D **SwinUNETR** (Swin Transformer U-Net) from MONAI.
-Label 6 (`poskozeni_hmyzem`) is boosted with the same three-layer strategy used by
+Label 6 (`Poškození hmyzem`) is boosted with the same three-layer strategy used by
 `nnUNetTrainerRareClassBoostWandb`:
 
 1. **Case-level oversampling** — cases containing label 6 are duplicated 8× so they appear more often per epoch.

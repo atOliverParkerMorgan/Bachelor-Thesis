@@ -342,7 +342,7 @@ class nnUNetTrainerRareClassBoostWandb(nnUNetTrainerWandb):
 
     Configuration (override as class attributes in a subclass if needed)
     -----------------------------------------------------------------------
-      RARE_LABEL_IDX         int   label index to boost (6 = poskozeni_hmyzem)
+    RARE_LABEL_IDX         int   label index to boost (6 = Poškození hmyzem)
       CASE_OVERSAMPLE_FACTOR int   extra copies of rare cases per epoch (8)
       CE_RARE_CLASS_WEIGHT   float CE loss weight multiplier for rare class (30.0)
       RARE_DICE_AUX_WEIGHT   float weight of auxiliary binary Dice term (5.0)
@@ -357,7 +357,7 @@ class nnUNetTrainerRareClassBoostWandb(nnUNetTrainerWandb):
     """
 
     # ── tuneable knobs ─────────────────────────────────────────────────────────
-    RARE_LABEL_IDX:         int   = 6     # poskozeni_hmyzem (dataset.json index)
+    RARE_LABEL_IDX:         int   = 6     # Poškození hmyzem (dataset.json index)
     CASE_OVERSAMPLE_FACTOR: int   = 8     # extra copies of rare cases per epoch
     CE_RARE_CLASS_WEIGHT:   float = 30.0  # CE loss weight for the rare class
     RARE_DICE_AUX_WEIGHT:   float = 5.0   # weight of auxiliary rare-class Dice term
@@ -453,7 +453,7 @@ class nnUNetTrainerRareClassBoostWandb(nnUNetTrainerWandb):
 
         self.print_to_log_file(
             f"RareClassBoost: found {len(rare_ids)} case(s) with "
-            f"label {self.RARE_LABEL_IDX} (poskozeni_hmyzem). "
+            f"label {self.RARE_LABEL_IDX} (Poškození hmyzem). "
             f"Added {n_added} duplicate entries → "
             f"total training cases: {len(self.dataset_tr.identifiers)}"
         )
@@ -479,7 +479,7 @@ class nnUNetTrainerRareClassBoostWandb(nnUNetTrainerWandb):
 
           2. Wrap in _CompoundLoss, adding an auxiliary _RareClassBinaryDice
              term (weight 5×) that directly optimises the per-class Dice score
-             for poskozeni_hmyzem on top of the standard DC+CE signal.
+               for Poškození hmyzem on top of the standard DC+CE signal.
         """
         loss = super()._build_loss()
 

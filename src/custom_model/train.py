@@ -10,7 +10,7 @@ from pathlib import Path
 
 import numpy as np
 import torch
-from monai.data import CacheDataset, DataLoader, decollate_batch, list_data_collate
+from monai.data import CacheDataset, DataLoader, Dataset, decollate_batch, list_data_collate
 from monai.inferers import sliding_window_inference
 from monai.metrics import DiceMetric
 from monai.transforms import AsDiscrete
@@ -33,11 +33,12 @@ class TrainConfig:
     weight_decay: float = 1e-5
     num_classes: int = 7
     val_fraction: float = 0.25
-    num_workers: int = 4
+    num_workers: int = 0
+    cache_rate: float = 0.0
     seed: int = 42
     amp: bool = True
     sliding_window_overlap: float = 0.5
-    # Rare-class (label 6 = poskozeni_hmyzem) handling
+    # Rare-class (label 6 = Poškození hmyzem) handling
     rare_label_idx: int = 6
     rare_class_weight: float = 30.0
     oversample_factor: int = 8
@@ -111,23 +112,35 @@ def train(config: TrainConfig) -> Path:
     )
     train_cases, val_cases = _split_cases(dataset.samples, config.val_fraction, config.seed)
 
-    train_ds = CacheDataset(
-        data=train_cases,
-        transform=get_train_transforms(
-            config.patch_size,
-            config.batch_size,
-            num_classes=config.num_classes,
-            rare_label_idx=config.rare_label_idx,
-        ),
-        cache_rate=1.0,
-        num_workers=config.num_workers,
+    train_transform = get_train_transforms(
+        config.patch_size,
+        config.batch_size,
+        num_classes=config.num_classes,
+        rare_label_idx=config.rare_label_idx,
     )
-    val_ds = CacheDataset(
-        data=val_cases,
-        transform=get_val_transforms(),
-        cache_rate=1.0,
-        num_workers=config.num_workers,
-    )
+    val_transform = get_val_transforms()
+
+    if config.cache_rate > 0:
+        print(
+            f"Using CacheDataset with cache_rate={config.cache_rate} and "
+            f"num_workers={config.num_workers}"
+        )
+        train_ds = CacheDataset(
+            data=train_cases,
+            transform=train_transform,
+            cache_rate=config.cache_rate,
+            num_workers=config.num_workers,
+        )
+        val_ds = CacheDataset(
+            data=val_cases,
+            transform=val_transform,
+            cache_rate=config.cache_rate,
+            num_workers=config.num_workers,
+        )
+    else:
+        print("Using Dataset without cache (cache_rate=0.0) to reduce RAM usage.")
+        train_ds = Dataset(data=train_cases, transform=train_transform)
+        val_ds = Dataset(data=val_cases, transform=val_transform)
 
     train_loader = DataLoader(
         train_ds,
@@ -136,6 +149,7 @@ def train(config: TrainConfig) -> Path:
         num_workers=config.num_workers,
         collate_fn=list_data_collate,
         pin_memory=torch.cuda.is_available(),
+        persistent_workers=config.num_workers > 0,
     )
     val_loader = DataLoader(
         val_ds,
@@ -143,6 +157,7 @@ def train(config: TrainConfig) -> Path:
         shuffle=False,
         num_workers=config.num_workers,
         pin_memory=torch.cuda.is_available(),
+        persistent_workers=config.num_workers > 0,
     )
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -154,7 +169,7 @@ def train(config: TrainConfig) -> Path:
         num_classes=config.num_classes,
         rare_label_idx=config.rare_label_idx,
         rare_class_weight=config.rare_class_weight,
-    )
+    ).to(device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=config.learning_rate, weight_decay=config.weight_decay)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=config.epochs)
     metric = DiceMetric(include_background=False, reduction="mean_batch")
@@ -249,12 +264,15 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--weight-decay", type=float, default=1e-5)
     parser.add_argument("--num-classes", type=int, default=7)
     parser.add_argument("--val-fraction", type=float, default=0.25)
-    parser.add_argument("--num-workers", type=int, default=4)
+    parser.add_argument("--num-workers", type=int, default=0,
+                        help="DataLoader worker processes (default: 0 for cluster stability).")
+    parser.add_argument("--cache-rate", type=float, default=0.0,
+                        help="MONAI CacheDataset cache fraction in [0,1]. 0 disables caching (default: 0).")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--no-amp", action="store_true", help="Disable mixed precision.")
     parser.add_argument("--sliding-window-overlap", type=float, default=0.5)
     parser.add_argument("--rare-label-idx", type=int, default=6,
-                        help="Label index to boost (default: 6 = poskozeni_hmyzem).")
+                        help="Label index to boost (default: 6 = Poškození hmyzem).")
     parser.add_argument("--rare-class-weight", type=float, default=30.0,
                         help="CE loss weight multiplier for the rare class (default: 30).")
     parser.add_argument("--oversample-factor", type=int, default=8,
@@ -280,6 +298,7 @@ def parse_args(argv=None) -> TrainConfig:
         num_classes=args.num_classes,
         val_fraction=args.val_fraction,
         num_workers=args.num_workers,
+        cache_rate=args.cache_rate,
         seed=args.seed,
         amp=not args.no_amp,
         sliding_window_overlap=args.sliding_window_overlap,
