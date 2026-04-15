@@ -24,6 +24,7 @@ requests-toolbelt = "^1.0.0"
 cvat-sdk = "^2.60.0"
 nnunetv2 = "^2.6.2"
 monai = "^1.5.2"
+wandb = "^0.18.7"
 torch = {version = "2.6.0+cu124", source = "pytorch-cu124"}
 torchvision = {version = "0.21.0+cu124", source = "pytorch-cu124"}
 torchaudio = {version = "2.6.0+cu124", source = "pytorch-cu124"}

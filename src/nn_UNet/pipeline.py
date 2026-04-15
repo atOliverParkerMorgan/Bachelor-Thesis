@@ -124,6 +124,9 @@ def apply_runtime_env_overrides(env: Dict[str, str], args: argparse.Namespace) -
     wandb_run_name = getattr(args, "wandb_run_name", None)
     if wandb_run_name:
         env["WANDB_RUN_NAME"] = wandb_run_name
+    wandb_api_key = getattr(args, "wandb_api_key", None)
+    if wandb_api_key:
+        env["WANDB_API_KEY"] = wandb_api_key
 
     n_proc_da = getattr(args, "n_proc_da", None)
     if n_proc_da is not None:
@@ -302,6 +305,67 @@ def model_output_dir(
     dataset_dirname = f"Dataset{dataset_id:03d}_{dataset_name}"
     model_dirname = f"{trainer}__{plans_identifier}__{configuration}"
     return nnunet_root / "nnUNet_results" / dataset_dirname / model_dirname
+
+
+def available_prediction_trainers(
+    nnunet_root: Path,
+    dataset_id: int,
+    dataset_name: str,
+    configuration: str,
+    plans_identifier: str,
+) -> List[str]:
+    dataset_dir = nnunet_root / "nnUNet_results" / f"Dataset{dataset_id:03d}_{dataset_name}"
+    if not dataset_dir.exists():
+        return []
+
+    suffix = f"__{plans_identifier}__{configuration}"
+    trainers: List[str] = []
+    for candidate in dataset_dir.glob(f"*{suffix}"):
+        if candidate.is_dir() and candidate.name.endswith(suffix):
+            trainers.append(candidate.name[: -len(suffix)])
+    return sorted(set(trainers))
+
+
+def resolve_prediction_trainer(
+    nnunet_root: Path,
+    dataset_id: int,
+    dataset_name: str,
+    configuration: str,
+    plans_identifier: str,
+    requested_trainer: str | None,
+) -> str:
+    if requested_trainer:
+        return requested_trainer
+
+    available = available_prediction_trainers(
+        nnunet_root=nnunet_root,
+        dataset_id=dataset_id,
+        dataset_name=dataset_name,
+        configuration=configuration,
+        plans_identifier=plans_identifier,
+    )
+    if len(available) == 1:
+        trainer = available[0]
+        log(f"Auto-detected trainer from results: {trainer}")
+        return trainer
+
+    if len(available) > 1:
+        for preferred in (
+            "nnUNetTrainer",
+            "nnUNetTrainerRareClassBoostWandb",
+            "nnUNetTrainerLungPretrainedWandb",
+            "nnUNetTrainerLungPretrained",
+        ):
+            if preferred in available:
+                log(f"Auto-selected trainer from available models: {preferred}")
+                return preferred
+        raise RuntimeError(
+            "Multiple model trainers found for this configuration. "
+            f"Please pass --trainer explicitly. Available: {', '.join(available)}"
+        )
+
+    # Keep legacy fallback for fresh environments without local results.
+    return "nnUNetTrainerRareClassBoostWandb"
 
 
 def prediction_folds(fold_value: str, model_dir: Path) -> List[str]:
@@ -490,9 +554,8 @@ def build_parser() -> argparse.ArgumentParser:
     predict.add_argument("--configuration", default="3d_fullres")
     predict.add_argument("--fold", default="0", help="Fold index or 'all'")
     predict.add_argument("--trainer", default=None,
-                         help="Trainer class name used during training "
-                              "(default: nnUNetTrainerRareClassBoostWandb). "
-                              "Must match the trainer used to train the model.")
+                         help="Trainer class name used during training. "
+                              "If omitted, auto-detected from existing model folders when possible.")
     add_hidden_legacy_planner_args(predict)
     predict.add_argument("--plans-identifier", default=None)
     add_clusterfit_arguments(predict)
@@ -506,8 +569,8 @@ def build_parser() -> argparse.ArgumentParser:
     predict_tree.add_argument("--fold", default="0", help="Fold index")
     predict_tree.add_argument("--make-datumaro", action="store_true", help="Convert NIfTI outputs to Datumaro format")
     predict_tree.add_argument("--trainer", default=None,
-                              help="Trainer class name used during training "
-                                   "(default: nnUNetTrainerRareClassBoostWandb).")
+                              help="Trainer class name used during training. "
+                                   "If omitted, auto-detected from existing model folders when possible.")
     add_hidden_legacy_planner_args(predict_tree)
     predict_tree.add_argument("--plans-identifier", default=None)
     add_clusterfit_arguments(predict_tree)
@@ -582,6 +645,10 @@ def build_parser() -> argparse.ArgumentParser:
         "--oversample-factor", type=int, default=8,
         help="Extra case copies per epoch for the rare class (default: 8).",
     )
+    custom_train_p.add_argument("--wandb", action="store_true", help="Enable Weights & Biases logging.")
+    custom_train_p.add_argument("--wandb-project", default="bp-custom-model", metavar="PROJECT", help="W&B project name.")
+    custom_train_p.add_argument("--wandb-entity", default=None, metavar="ENTITY", help="W&B entity / team name.")
+    custom_train_p.add_argument("--wandb-run-name", default=None, metavar="NAME", help="Display name for this W&B run.")
     add_clusterfit_arguments(custom_train_p)
 
     return parser
@@ -726,7 +793,14 @@ def run_predict(args: argparse.Namespace, env: Dict[str, str]) -> None:
         active_input = input_path
 
     plans_identifier = resolve_plans_identifier(args)
-    trainer = getattr(args, "trainer", None) or "nnUNetTrainerRareClassBoostWandb"
+    trainer = resolve_prediction_trainer(
+        nnunet_root=args.nnunet_root,
+        dataset_id=args.dataset_id,
+        dataset_name=args.dataset_name,
+        configuration=args.configuration,
+        plans_identifier=plans_identifier,
+        requested_trainer=getattr(args, "trainer", None),
+    )
     checkpoint_name = resolve_prediction_checkpoint(
         nnunet_root=args.nnunet_root,
         dataset_id=args.dataset_id,
@@ -810,10 +884,18 @@ def run_predict_tree(args: argparse.Namespace, env: Dict[str, str]) -> None:
 
         # Build the standard nnUNet predict command
         plans_identifier = resolve_plans_identifier(args)
+        trainer = resolve_prediction_trainer(
+            nnunet_root=args.nnunet_root,
+            dataset_id=args.dataset_id,
+            dataset_name=args.dataset_name,
+            configuration=args.configuration,
+            plans_identifier=plans_identifier,
+            requested_trainer=getattr(args, "trainer", None),
+        )
         checkpoint_name = resolve_prediction_checkpoint(
             nnunet_root=args.nnunet_root, dataset_id=args.dataset_id,
             dataset_name=args.dataset_name, configuration=args.configuration,
-            plans_identifier=plans_identifier, fold=str(args.fold)
+            plans_identifier=plans_identifier, fold=str(args.fold), trainer=trainer,
         )
 
         cmd = [
@@ -821,6 +903,7 @@ def run_predict_tree(args: argparse.Namespace, env: Dict[str, str]) -> None:
             "-i", str(nifti_in_dir), "-o", str(nifti_out_dir),
             "-d", str(args.dataset_id), "-c", args.configuration,
             "-f", str(args.fold), "-p", plans_identifier,
+            "-tr", trainer,
         ]
         if checkpoint_name:
             cmd.extend(["-chk", checkpoint_name])
@@ -878,6 +961,13 @@ def run_custom_train(args: argparse.Namespace, env: Dict[str, str]) -> None:
     ]
     if getattr(args, "no_amp", False):
         cmd.append("--no-amp")
+    if getattr(args, "wandb", False):
+        cmd.append("--wandb")
+        cmd.extend(["--wandb-project", str(args.wandb_project)])
+        if getattr(args, "wandb_entity", None):
+            cmd.extend(["--wandb-entity", str(args.wandb_entity)])
+        if getattr(args, "wandb_run_name", None):
+            cmd.extend(["--wandb-run-name", str(args.wandb_run_name)])
 
     log(f"Custom model training: {' '.join(cmd)}")
     try:
@@ -900,6 +990,7 @@ def submit_to_clusterfit(args: argparse.Namespace, env: Dict[str, str]) -> None:
         "nnUNet_results", "NNUNET_SAVE_EVERY", "NNUNET_INITIAL_LR",
         "NNUNET_PRETRAINED_WEIGHTS", "NNUNET_SKIP_ARCH_PLOT", "nnUNet_compile", "nnUNet_n_proc_DA",
         "OMP_NUM_THREADS", "MKL_NUM_THREADS", "OPENBLAS_NUM_THREADS", "NUMEXPR_NUM_THREADS",
+        "WANDB_PROJECT", "WANDB_ENTITY", "WANDB_RUN_NAME", "WANDB_API_KEY",
     ):
         value = env.get(key)
         if value:

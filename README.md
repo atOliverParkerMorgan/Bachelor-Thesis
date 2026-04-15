@@ -269,7 +269,9 @@ poetry run python -m src.custom_model.train \
 	--patch-size 128 384 128 \
 	--learning-rate 1e-3 \
 	--num-classes 7 \
-	--val-fraction 0.25
+	--val-fraction 0.25 \
+	--wandb \
+	--wandb-project "bp-custom-model"
 ```
 
 ### Run on ClusterFIT (recommended)
@@ -287,7 +289,9 @@ Uses `./run_nnunet custom-train`. Image/label directories default to
     --epochs 1000 \
     --batch-size 2 \
     --patch-size 128 384 128 \
-    --learning-rate 1e-3
+	--learning-rate 1e-3 \
+	--wandb \
+	--wandb-project "bp-custom-model"
 ```
 
 Resume from a checkpoint is not currently supported by the custom model — restart training with `--output-dir` pointing to a fresh directory or keep `last_model.pth` and re-implement resumption manually.

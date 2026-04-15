@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import random
+from importlib import import_module
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
@@ -39,6 +41,10 @@ class TrainConfig:
     rare_label_idx: int = 6
     rare_class_weight: float = 30.0
     oversample_factor: int = 8
+    wandb: bool = False
+    wandb_project: str = "bp-custom-model"
+    wandb_entity: str | None = None
+    wandb_run_name: str | None = None
 
 
 def _seed_everything(seed: int) -> None:
@@ -65,12 +71,36 @@ def _split_cases(cases, val_fraction, seed):
     return [cases[i] for i in train_indices], [cases[i] for i in val_indices]
 
 
+def _init_wandb(config: TrainConfig):
+    try:
+        wandb = import_module("wandb")
+    except ImportError:
+        print("WARNING: wandb is not installed. Continuing without W&B logging.")
+        return None
+
+    project = config.wandb_project or os.environ.get("WANDB_PROJECT") or "bp-custom-model"
+    entity = config.wandb_entity or os.environ.get("WANDB_ENTITY") or None
+    run_name = config.wandb_run_name or os.environ.get("WANDB_RUN_NAME") or None
+
+    wandb.init(
+        project=project,
+        entity=entity,
+        name=run_name,
+        config=asdict(config),
+        resume="allow",
+    )
+    print(f"W&B run initialised: project={project}, entity={entity}, name={run_name}")
+    return wandb
+
+
 def train(config: TrainConfig) -> Path:
     _seed_everything(config.seed)
 
     output_dir = Path(config.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     (output_dir / "config.json").write_text(json.dumps(asdict(config), indent=2), encoding="utf-8")
+
+    wandb = _init_wandb(config) if config.wandb else None
 
     # Build dataset with rare-class case-level oversampling
     dataset = WoodDefectDataset(
@@ -183,6 +213,16 @@ def train(config: TrainConfig) -> Path:
             f"val_dice: {mean_dice:.4f} - per_class: {dice_scores.tolist()}"
         )
 
+        if wandb is not None and wandb.run is not None:
+            metrics = {
+                "epoch": epoch + 1,
+                "train/loss": epoch_loss / max(1, len(train_loader)),
+                "val/mean_dice": mean_dice,
+            }
+            for class_index, dice_value in enumerate(dice_scores.tolist()):
+                metrics[f"val/dice_class_{class_index}"] = float(dice_value)
+            wandb.log(metrics, step=epoch + 1)
+
         torch.save({"epoch": epoch + 1, "model_state_dict": model.state_dict(), "config": asdict(config)}, last_path)
         if mean_dice > best_metric:
             best_metric = mean_dice
@@ -190,6 +230,10 @@ def train(config: TrainConfig) -> Path:
             torch.save({"epoch": epoch + 1, "model_state_dict": model.state_dict(), "config": asdict(config)}, best_path)
 
     print(f"Best validation dice: {best_metric:.4f} at epoch {best_metric_epoch}")
+    if wandb is not None and wandb.run is not None:
+        wandb.run.summary["best/val_dice"] = best_metric
+        wandb.run.summary["best/epoch"] = best_metric_epoch
+        wandb.finish()
     return best_path
 
 
@@ -215,6 +259,10 @@ def build_arg_parser() -> argparse.ArgumentParser:
                         help="CE loss weight multiplier for the rare class (default: 30).")
     parser.add_argument("--oversample-factor", type=int, default=8,
                         help="Extra case copies per epoch for the rare class (default: 8).")
+    parser.add_argument("--wandb", action="store_true", help="Enable Weights & Biases logging.")
+    parser.add_argument("--wandb-project", default="bp-custom-model", metavar="PROJECT", help="W&B project name.")
+    parser.add_argument("--wandb-entity", default=None, metavar="ENTITY", help="W&B entity / team name.")
+    parser.add_argument("--wandb-run-name", default=None, metavar="NAME", help="Display name for this W&B run.")
     return parser
 
 
@@ -238,6 +286,10 @@ def parse_args(argv=None) -> TrainConfig:
         rare_label_idx=args.rare_label_idx,
         rare_class_weight=args.rare_class_weight,
         oversample_factor=args.oversample_factor,
+        wandb=args.wandb,
+        wandb_project=args.wandb_project,
+        wandb_entity=args.wandb_entity,
+        wandb_run_name=args.wandb_run_name,
     )
 
 

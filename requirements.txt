@@ -28,6 +28,7 @@ torchaudio==2.6.0+cu124
 # nnU-Net
 nnunetv2>=2.6.2,<3.0
 monai>=1.5,<2.0
+wandb>=0.17,<1.0
 
 # Computer vision
 opencv-python==4.9.0.80
