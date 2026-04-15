@@ -14,11 +14,11 @@ DEFAULT_INPUT = "src/nn_UNet/predictions/"
 DEFAULT_OUTPUT = "src/nn_UNet/predictions/mask"
 DEFAULT_TREE = "dub_4"
 
-# nnU-Net class index mapping used in this repository:
-# 0 Zdravé dřevo, 1 Pozadí, 2 suk, 3 Hniloba, 4 Kůra, 5 Trhlina, 6 Poškození hmyzem
+# nnU-Net class index mapping (per dataset.json):
+# 0 Pozadí, 1 Zdravé dřevo, 2 Suk, 3 Hniloba, 4 Kůra, 5 Trhlina, 6 Poškození hmyzem
 LABEL_TO_RGB = {
-    0: (163, 56, 212),   # Zdravé dřevo   #a338d4
-    1: (214, 149, 170),  # Pozadí         #d695aa
+    0: (214, 149, 170),  # Pozadí         #d695aa
+    1: (163, 56, 212),   # Zdravé dřevo   #a338d4
     2: (174, 60, 29),    # Suk            #ae3c1d
     3: (153, 242, 107),  # Hniloba        #99f26b
     4: (38, 114, 129),   # Kůra           #267281

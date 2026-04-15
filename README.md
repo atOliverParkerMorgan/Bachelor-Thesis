@@ -349,8 +349,13 @@ poetry run python src/preprocessing/utils/zorder_cvat_fix.py --tree dub4
     --fold 0 \
     --make-datumaro
 
-# to a cvat format
-poetry run python src/preprocessing/conversion/nii2mask.py --tree dub_4
+# NIfTI → Datumaro in one step (when you already have predictions/*.nii.gz)
+poetry run python src/preprocessing/conversion/predict2datumaro.py --tree DUB_4
+
+# Optional overrides:
+# --predictions-root ./src/nn_UNet/predictions   (default)
+# --output ./predictions/dub_4_datumaro.zip
+# --no-media                                      (annotations only, smaller zip)
 ```
 
 ## 7) Useful project files

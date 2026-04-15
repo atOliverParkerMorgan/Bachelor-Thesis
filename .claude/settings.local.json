@@ -1,7 +1,10 @@
 {
   "permissions": {
     "allow": [
-      "Bash(python -c ':*)"
+      "Bash(python -c ':*)",
+      "Bash(echo \"exit:$?\")",
+      "Bash(python3 -c ' *)",
+      "Bash(xargs grep *)"
     ]
   }
 }
