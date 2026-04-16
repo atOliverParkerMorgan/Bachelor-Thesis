@@ -149,12 +149,42 @@ Use the same commands with cluster flags.
 	--slurm-gpu a100_40 \
 	--slurm-time 72:00:00 \
 	--configuration 3d_fullres \
+	--initial-lr 1e-3 \
 	--compile off \
 	--n-proc-da 4 \
 	--cpu-threads 1 \
 	--fold 0
 	
 ```
+
+### Regularized nnU-Net training (recommended for Dataset002 split)
+
+This enables plan overrides before training to reduce model capacity and add dropout.
+
+```bash
+./run_nnunet --dataset-id 2 --dataset-name BPWoodDefectsSplit train \
+	--clusterfit \
+	--slurm-partition gpu \
+	--slurm-cpus-per-task 8 \
+	--slurm-gpu a100_40 \
+	--slurm-time 48:00:00 \
+	--configuration 3d_fullres \
+	--fold 0 \
+	--initial-lr 1e-3 \
+	--regularize-arch \
+	--model-dropout-p 0.2 \
+	--model-features 32 64 128 256 256 256 \
+	--model-n-stages 6 \
+	--model-batch-size 2 \
+	--compile off \
+	--n-proc-da 4 \
+	--cpu-threads 1 \
+	--wandb \
+	--wandb-project "bp-wood-defects"
+```
+
+For an even smaller model, set `--model-n-stages 5` and use
+`--model-features 32 64 128 256 256`.
 
 If training appears stuck before epoch logs on `3d_fullres`, use this safer command:
 
@@ -194,7 +224,12 @@ poetry run python src/nn_UNet/label_stats.py ./src/nn_UNet/nnunet_data/nnUNet_ra
 
 **Train with pretrained weights and W&B logging (best parameters for this dataset):**
 
-
+./run_nnunet --dataset-id 2 --dataset-name BPWoodDefectsSplit train \
+  --configuration 3d_fullres \
+  --compile off \
+  --n-proc-da 4 \
+  --cpu-threads 1 \
+  --fold 4
 ```bash
 ./run_nnunet train \
     --clusterfit \
@@ -276,8 +311,8 @@ poetry run python -m src.custom_model.train \
 
 ### Run on ClusterFIT (recommended)
 
-Uses `./run_nnunet custom-train`. Image/label directories default to
-`nnunet_root/nnUNet_raw/Dataset001_BPWoodDefects/{imagesTr,labelsTr}`.
+Uses `./run_nnunet custom-train`. Image/label directories now default to
+`nnunet_root/nnUNet_raw/Dataset002_BPWoodDefectsSplit/{imagesTr,labelsTr}`.
 
 ```bash
 ./run_nnunet custom-train \
@@ -290,13 +325,52 @@ Uses `./run_nnunet custom-train`. Image/label directories default to
     --batch-size 2 \
     --patch-size 128 384 128 \
 	--learning-rate 1e-3 \
+	--early-stopping-patience 50 \
+	--early-stopping-min-delta 1e-4 \
+	--early-stopping-min-epochs 50 \
 	--wandb \
 	--wandb-project "bp-custom-model"
 ```
 
+If you want to be explicit, you can also pass:
+
+```bash
+./run_nnunet custom-train --dataset-id 2 --dataset-name BPWoodDefectsSplit
+```
+
 Resume from a checkpoint is not currently supported by the custom model — restart training with `--output-dir` pointing to a fresh directory or keep `last_model.pth` and re-implement resumption manually.
 
-The trainer writes `best_model.pth`, `last_model.pth`, and the resolved config JSON into the output directory.
+The trainer writes the following files into `--output-dir` (default `./output/custom_model`):
+
+- `config.json` — resolved run configuration.
+- `best_model.pth` — best checkpoint by validation Dice.
+- `last_model.pth` — latest checkpoint.
+- `metrics_history.json` and `metrics_history.csv` — epoch-by-epoch metrics.
+- `training_curves.png` — graph with training loss, validation loss, training Dice, validation Dice, and learning-rate curve.
+- `run_summary.json` — final run status (`finished` / `failed`), best epoch, and artifact index.
+
+Early stopping monitors validation Dice (`val_mean_dice`) and is enabled by default.
+Set `--early-stopping-patience 0` to disable it.
+
+### CUDA OOM quick fix for custom model
+
+If you see `torch.OutOfMemoryError` on A100 40 GB, lower memory pressure first:
+
+```bash
+PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True \
+./run_nnunet custom-train \
+	--clusterfit \
+	--slurm-partition gpu \
+	--slurm-cpus-per-task 8 \
+	--slurm-gpu a100_40 \
+	--slurm-time 24:00:00 \
+	--epochs 1000 \
+	--batch-size 1 \
+	--patch-size 96 288 96 \
+	--learning-rate 1e-3 \
+	--wandb \
+	--wandb-project "bp-custom-model"
+```
 
 ### Predict on cluster
 

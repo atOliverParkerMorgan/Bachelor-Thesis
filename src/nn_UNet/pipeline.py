@@ -294,6 +294,100 @@ def resolve_train_configuration(args: argparse.Namespace) -> str:
     return "3d_fullres"
 
 
+def _fit_int_list(values: List[int], target_len: int) -> List[int]:
+    if target_len <= 0:
+        return []
+    if not values:
+        return [1] * target_len
+    if len(values) == target_len:
+        return values
+    if len(values) > target_len:
+        return values[:target_len]
+    return values + [values[-1]] * (target_len - len(values))
+
+
+def _decoder_len_for_stages(n_stages: int) -> int:
+    return max(1, n_stages - 1)
+
+
+def apply_plan_regularization_overrides(
+    args: argparse.Namespace,
+    plans_identifier: str,
+    configuration: str,
+) -> None:
+    if not getattr(args, "regularize_arch", False):
+        return
+
+    plans_file = (
+        args.nnunet_root
+        / "nnUNet_preprocessed"
+        / f"Dataset{args.dataset_id:03d}_{args.dataset_name}"
+        / f"{plans_identifier}.json"
+    )
+    if not plans_file.exists():
+        log(
+            f"Plan override skipped: plans file not found at {plans_file}. "
+            "Run plan/preprocess first."
+        )
+        return
+
+    with open(plans_file, "r", encoding="utf-8") as f:
+        plans = json.load(f)
+
+    cfg = plans.get("configurations", {}).get(configuration)
+    if not isinstance(cfg, dict):
+        log(
+            f"Plan override skipped: configuration '{configuration}' not found in {plans_file.name}."
+        )
+        return
+
+    arch = cfg.get("architecture", {})
+    arch_kwargs = arch.get("arch_kwargs")
+    if not isinstance(arch_kwargs, dict):
+        log("Plan override skipped: architecture arch_kwargs missing in plans JSON.")
+        return
+
+    n_stages = int(getattr(args, "model_n_stages", 6) or 6)
+    user_features = getattr(args, "model_features", None)
+    if user_features:
+        features = [int(v) for v in user_features]
+    else:
+        features = [32, 64, 128, 256, 256, 256] if n_stages == 6 else [32, 64, 128, 256, 256]
+    features = _fit_int_list(features, n_stages)
+
+    arch_kwargs["n_stages"] = n_stages
+    arch_kwargs["features_per_stage"] = features
+    arch_kwargs["dropout_op"] = "torch.nn.Dropout3d"
+    arch_kwargs["dropout_op_kwargs"] = {
+        "p": float(getattr(args, "model_dropout_p", 0.2)),
+        "inplace": True,
+    }
+
+    for key in ("kernel_sizes", "strides", "n_blocks_per_stage"):
+        if isinstance(arch_kwargs.get(key), list):
+            arch_kwargs[key] = _fit_int_list(arch_kwargs[key], n_stages)
+
+    decoder_key = "n_conv_per_stage_decoder"
+    if isinstance(arch_kwargs.get(decoder_key), list):
+        arch_kwargs[decoder_key] = _fit_int_list(
+            arch_kwargs[decoder_key], _decoder_len_for_stages(n_stages)
+        )
+
+    model_batch_size = getattr(args, "model_batch_size", None)
+    if model_batch_size is not None:
+        cfg["batch_size"] = int(model_batch_size)
+
+    with open(plans_file, "w", encoding="utf-8") as f:
+        json.dump(plans, f, indent=2)
+
+    log(
+        "Applied plans override for training: "
+        f"dropout={arch_kwargs['dropout_op_kwargs']['p']}, "
+        f"n_stages={n_stages}, features={features}, "
+        f"batch_size={cfg.get('batch_size')}"
+    )
+
+
 def model_output_dir(
     nnunet_root: Path,
     dataset_id: int,
@@ -507,7 +601,38 @@ def build_parser() -> argparse.ArgumentParser:
     train.add_argument("--trainer", default=None, help="Optional custom trainer class name")
     train.add_argument("--save-every", type=int, default=10)
     train.add_argument("--skip-arch-plot", action="store_true")
-    train.add_argument("--initial-lr", type=float, default=None)
+    train.add_argument("--initial-lr", type=float, default=1e-3)
+    train.add_argument(
+        "--regularize-arch",
+        action="store_true",
+        help="Patch the selected plans JSON before training (dropout + smaller model).",
+    )
+    train.add_argument(
+        "--model-dropout-p",
+        type=float,
+        default=0.2,
+        help="Dropout probability used when --regularize-arch is enabled.",
+    )
+    train.add_argument(
+        "--model-features",
+        type=int,
+        nargs="+",
+        default=None,
+        help="features_per_stage override when --regularize-arch is enabled.",
+    )
+    train.add_argument(
+        "--model-n-stages",
+        type=int,
+        choices=[5, 6],
+        default=6,
+        help="Encoder depth override when --regularize-arch is enabled.",
+    )
+    train.add_argument(
+        "--model-batch-size",
+        type=int,
+        default=None,
+        help="Patch plans batch_size when --regularize-arch is enabled.",
+    )
     train.add_argument(
         "--compile",
         choices=["auto", "on", "off"],
@@ -587,7 +712,38 @@ def build_parser() -> argparse.ArgumentParser:
     all_cmd.add_argument("--fold", default="0")
     all_cmd.add_argument("--save-every", type=int, default=10)
     all_cmd.add_argument("--skip-arch-plot", action="store_true")
-    all_cmd.add_argument("--initial-lr", type=float, default=None)
+    all_cmd.add_argument("--initial-lr", type=float, default=1e-3)
+    all_cmd.add_argument(
+        "--regularize-arch",
+        action="store_true",
+        help="Patch the selected plans JSON before training (dropout + smaller model).",
+    )
+    all_cmd.add_argument(
+        "--model-dropout-p",
+        type=float,
+        default=0.2,
+        help="Dropout probability used when --regularize-arch is enabled.",
+    )
+    all_cmd.add_argument(
+        "--model-features",
+        type=int,
+        nargs="+",
+        default=None,
+        help="features_per_stage override when --regularize-arch is enabled.",
+    )
+    all_cmd.add_argument(
+        "--model-n-stages",
+        type=int,
+        choices=[5, 6],
+        default=6,
+        help="Encoder depth override when --regularize-arch is enabled.",
+    )
+    all_cmd.add_argument(
+        "--model-batch-size",
+        type=int,
+        default=None,
+        help="Patch plans batch_size when --regularize-arch is enabled.",
+    )
     all_cmd.add_argument("--compile", choices=["auto", "on", "off"], default="auto")
     all_cmd.add_argument("--n-proc-da", type=int, default=4)
     all_cmd.add_argument("--cpu-threads", type=int, default=1)
@@ -611,6 +767,8 @@ def build_parser() -> argparse.ArgumentParser:
         "custom-train",
         help="Train the custom 3D SwinUNETR wood-defect model (supports ClusterFIT)",
     )
+    custom_train_p.add_argument("--dataset-id", type=int, default=2)
+    custom_train_p.add_argument("--dataset-name", default="BPWoodDefectsSplit")
     custom_train_p.add_argument(
         "--image-dir", type=Path, default=None,
         help="Directory with input NIfTI volumes "
@@ -644,6 +802,18 @@ def build_parser() -> argparse.ArgumentParser:
     custom_train_p.add_argument(
         "--oversample-factor", type=int, default=8,
         help="Extra case copies per epoch for the rare class (default: 8).",
+    )
+    custom_train_p.add_argument(
+        "--early-stopping-patience", type=int, default=50,
+        help="Stop if val_dice does not improve for this many epochs (0 disables early stopping).",
+    )
+    custom_train_p.add_argument(
+        "--early-stopping-min-delta", type=float, default=1e-4,
+        help="Minimum val_dice increase to count as an improvement.",
+    )
+    custom_train_p.add_argument(
+        "--early-stopping-min-epochs", type=int, default=50,
+        help="Do not early-stop before this epoch count.",
     )
     custom_train_p.add_argument("--wandb", action="store_true", help="Enable Weights & Biases logging.")
     custom_train_p.add_argument("--wandb-project", default="bp-custom-model", metavar="PROJECT", help="W&B project name.")
@@ -679,6 +849,8 @@ def run_plan(args: argparse.Namespace, env: Dict[str, str]) -> None:
 def run_train(args: argparse.Namespace, env: Dict[str, str]) -> None:
     plans_identifier = resolve_plans_identifier(args)
     configuration = resolve_train_configuration(args)
+
+    apply_plan_regularization_overrides(args, plans_identifier, configuration)
 
     ensure_crossval_splits(
         nnunet_root=args.nnunet_root,
@@ -958,6 +1130,9 @@ def run_custom_train(args: argparse.Namespace, env: Dict[str, str]) -> None:
         "--rare-label-idx", str(args.rare_label_idx),
         "--rare-class-weight", str(args.rare_class_weight),
         "--oversample-factor", str(args.oversample_factor),
+        "--early-stopping-patience", str(args.early_stopping_patience),
+        "--early-stopping-min-delta", str(args.early_stopping_min_delta),
+        "--early-stopping-min-epochs", str(args.early_stopping_min_epochs),
     ]
     if getattr(args, "no_amp", False):
         cmd.append("--no-amp")

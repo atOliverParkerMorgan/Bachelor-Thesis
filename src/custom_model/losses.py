@@ -6,12 +6,12 @@ from monai.losses import DiceCELoss
 def get_loss(
     num_classes: int = 7,
     rare_label_idx: int = 6,
-    rare_class_weight: float = 30.0,
+    rare_class_weight: float = 15.0,
 ) -> DiceCELoss:
     """Return a DiceCE loss with elevated CE weight for the rare class.
 
     Class ``rare_label_idx`` (Poškození hmyzem = 6) receives a CE weight of
-    ``rare_class_weight`` (30×) so mis-classifying its voxels costs
+    ``rare_class_weight`` (15×) so mis-classifying its voxels costs
     proportionally more — matching the strategy in
     nnUNetTrainerRareClassBoostWandb.
     """
