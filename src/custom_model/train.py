@@ -5,6 +5,7 @@ import csv
 import json
 import os
 import random
+import traceback
 from importlib import import_module
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -32,7 +33,7 @@ class TrainConfig:
     batch_size: int = 2
     patch_size: tuple[int, int, int] = (128, 384, 128)
     learning_rate: float = 1e-3
-    weight_decay: float = 1e-5
+    weight_decay: float = 1e-4
     num_classes: int = 7
     val_fraction: float = 0.25
     num_workers: int = 0
@@ -47,10 +48,15 @@ class TrainConfig:
     early_stopping_patience: int = 50
     early_stopping_min_delta: float = 1e-4
     early_stopping_min_epochs: int = 50
+    grad_accumulation_steps: int = 4
+    warmup_epochs: int = 20
+    max_grad_norm: float = 1.0
+    dropout_path_rate: float = 0.1
     wandb: bool = False
     wandb_project: str = "bp-custom-model"
     wandb_entity: str | None = None
     wandb_run_name: str | None = None
+    debug_data: bool = False
 
 
 def _seed_everything(seed: int) -> None:
@@ -61,20 +67,76 @@ def _seed_everything(seed: int) -> None:
         torch.cuda.manual_seed_all(seed)
 
 
-def _split_cases(cases, val_fraction, seed):
+def _stratified_split(
+    cases: list,
+    case_classes: dict,
+    val_fraction: float,
+    seed: int,
+) -> tuple[list, list]:
+    """Split unique base cases ensuring every class that appears in ≥2 volumes
+    is represented in both train and val.  Classes found in only one volume
+    stay in training (maximises learning signal).
+
+    The split is done on ``cases`` BEFORE oversampling so that duplicate
+    entries from rare-class boosting never cross the train/val boundary.
+    """
     if len(cases) < 2:
         raise ValueError("Need at least two volumes to create a train/validation split.")
 
-    rng = random.Random(seed)
-    indices = list(range(len(cases)))
-    rng.shuffle(indices)
+    n = len(cases)
+    n_val = max(1, int(round(n * val_fraction)))
+    n_val = min(n_val, n - 1)
 
-    n_val = max(1, int(round(len(cases) * val_fraction)))
-    n_val = min(n_val, len(cases) - 1)
-    val_indices = indices[:n_val]
-    train_indices = indices[n_val:]
+    # Map each foreground class → indices of cases that contain it
+    class_to_indices: dict[int, list[int]] = {}
+    for i, case in enumerate(cases):
+        for cls in case_classes.get(case["label"], frozenset()):
+            if cls == 0:
+                continue  # background not relevant for dice
+            class_to_indices.setdefault(cls, []).append(i)
 
+    val_set: set[int] = set()
+
+    # Greedy: for each class with ≥2 cases, guarantee one case ends up in val
+    for cls in sorted(class_to_indices):
+        candidates = class_to_indices[cls]
+        if len(candidates) < 2:
+            continue
+        if any(i in val_set for i in candidates):
+            continue  # already covered
+        if len(val_set) >= n_val:
+            break
+        # Deterministic choice per class so the result is reproducible
+        rng_cls = random.Random(seed + cls)
+        val_set.add(rng_cls.choice(candidates))
+
+    # Fill remaining val slots with a random shuffle of the leftover cases
+    remaining = [i for i in range(n) if i not in val_set]
+    random.Random(seed).shuffle(remaining)
+    while len(val_set) < n_val and remaining:
+        val_set.add(remaining.pop())
+
+    train_indices = [i for i in range(n) if i not in val_set]
+    val_indices = sorted(val_set)
     return [cases[i] for i in train_indices], [cases[i] for i in val_indices]
+
+
+def _split_class_presence(cases: list, case_classes: dict) -> dict[int, int]:
+    counts: dict[int, int] = {}
+    for case in cases:
+        for cls in case_classes.get(case["label"], frozenset()):
+            counts[cls] = counts.get(cls, 0) + 1
+    return counts
+
+
+def _debug_dataset_split(train_cases: list, val_cases: list, case_classes: dict) -> None:
+    def _labels_for(cases: list) -> list[str]:
+        return [Path(case["label"]).name for case in cases]
+
+    print("[debug] train cases:", _labels_for(train_cases))
+    print("[debug] val cases:", _labels_for(val_cases))
+    print("[debug] train class presence:", _split_class_presence(train_cases, case_classes))
+    print("[debug] val class presence:", _split_class_presence(val_cases, case_classes))
 
 
 def _init_wandb(config: TrainConfig):
@@ -180,14 +242,35 @@ def train(config: TrainConfig) -> Path:
 
     wandb = _init_wandb(config) if config.wandb else None
 
-    # Build dataset with rare-class case-level oversampling
+    # Build dataset (oversampling recorded in dataset.case_classes / base_samples)
     dataset = WoodDefectDataset(
         config.image_dir,
         config.label_dir,
         rare_label_idx=config.rare_label_idx,
         oversample_factor=config.oversample_factor,
     )
-    train_cases, val_cases = _split_cases(dataset.samples, config.val_fraction, config.seed)
+
+    # Split on UNIQUE base cases only — no duplicates cross the train/val boundary.
+    # Stratified to guarantee every class present in ≥2 volumes appears in val.
+    train_base, val_cases = _stratified_split(
+        dataset.base_samples, dataset.case_classes, config.val_fraction, config.seed
+    )
+
+    if config.debug_data:
+        _debug_dataset_split(train_base, val_cases, dataset.case_classes)
+
+    # Apply rare-class oversampling to the TRAINING fold only.
+    rare_train = [
+        c for c in train_base
+        if config.rare_label_idx in dataset.case_classes.get(c["label"], frozenset())
+    ]
+    train_cases = list(train_base)
+    for _ in range(config.oversample_factor):
+        train_cases.extend(rare_train)
+    print(
+        f"Split: {len(train_base)} train base + {len(rare_train) * config.oversample_factor} "
+        f"rare duplicates = {len(train_cases)} train total | {len(val_cases)} val"
+    )
 
     train_transform = get_train_transforms(
         config.patch_size,
@@ -225,7 +308,7 @@ def train(config: TrainConfig) -> Path:
         shuffle=True,
         num_workers=config.num_workers,
         collate_fn=list_data_collate,
-        pin_memory=torch.cuda.is_available(),
+        pin_memory=False,
         persistent_workers=config.num_workers > 0,
     )
     val_loader = DataLoader(
@@ -233,14 +316,19 @@ def train(config: TrainConfig) -> Path:
         batch_size=1,
         shuffle=False,
         num_workers=config.num_workers,
-        pin_memory=torch.cuda.is_available(),
+        pin_memory=False,
         persistent_workers=config.num_workers > 0,
     )
+
+    if config.debug_data:
+        sample = next(iter(val_loader))
+        print("[debug] first val batch label values:", torch.unique(sample["label"]).tolist())
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = get_swin_model(
         num_classes=config.num_classes,
         img_size=config.patch_size,
+        dropout_path_rate=config.dropout_path_rate,
     ).to(device)
     loss_fn = get_loss(
         num_classes=config.num_classes,
@@ -253,7 +341,25 @@ def train(config: TrainConfig) -> Path:
         rare_class_weight=config.rare_class_weight,
     ).cpu()
     optimizer = torch.optim.AdamW(model.parameters(), lr=config.learning_rate, weight_decay=config.weight_decay)
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=config.epochs)
+
+    # Linear warmup for warmup_epochs, then cosine decay over the remainder.
+    # T_max tracks actual remaining epochs so the LR reaches its minimum by
+    # the end of training (or early stopping) rather than at epoch 1000.
+    warmup = max(0, config.warmup_epochs)
+    cosine_epochs = max(1, config.epochs - warmup)
+    if warmup > 0:
+        scheduler = torch.optim.lr_scheduler.SequentialLR(
+            optimizer,
+            schedulers=[
+                torch.optim.lr_scheduler.LinearLR(
+                    optimizer, start_factor=0.01, end_factor=1.0, total_iters=warmup
+                ),
+                torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=cosine_epochs),
+            ],
+            milestones=[warmup],
+        )
+    else:
+        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=cosine_epochs)
     metric = DiceMetric(include_background=False, reduction="mean_batch")
     post_pred = AsDiscrete(argmax=True, to_onehot=config.num_classes)
     post_label = AsDiscrete(to_onehot=config.num_classes)
@@ -277,24 +383,39 @@ def train(config: TrainConfig) -> Path:
             model.train()
             train_metric.reset()
             epoch_loss = 0.0
+            accum_steps = max(1, config.grad_accumulation_steps)
+            optimizer.zero_grad(set_to_none=True)
 
-            for batch_data in train_loader:
+            for batch_idx, batch_data in enumerate(train_loader):
                 inputs = batch_data["image"].to(device)
                 labels = batch_data["label"].to(device)
 
-                optimizer.zero_grad(set_to_none=True)
                 with torch.amp.autocast("cuda", enabled=config.amp and device.type == "cuda"):
                     outputs = model(inputs)
-                    loss = loss_fn(outputs, labels)
+                    loss = loss_fn(outputs, labels) / accum_steps
+
+                if not torch.isfinite(loss):
+                    raise RuntimeError(
+                        f"Non-finite loss at epoch {epoch+1} batch {batch_idx}: {loss.item():.6f}. "
+                        f"loss_fn inputs: outputs min={outputs.min().item():.4f} max={outputs.max().item():.4f}, "
+                        f"labels unique={labels.unique().tolist()}"
+                    )
 
                 scaler.scale(loss).backward()
-                scaler.step(optimizer)
-                scaler.update()
-                epoch_loss += loss.item()
+                epoch_loss += loss.item() * accum_steps  # log unscaled value
 
                 train_outputs = [post_pred(item) for item in decollate_batch(outputs.detach())]
                 train_labels = [post_label(item) for item in decollate_batch(labels.detach())]
                 train_metric(y_pred=train_outputs, y=train_labels)
+
+                is_last_batch = (batch_idx + 1) == len(train_loader)
+                if (batch_idx + 1) % accum_steps == 0 or is_last_batch:
+                    if config.max_grad_norm > 0:
+                        scaler.unscale_(optimizer)
+                        torch.nn.utils.clip_grad_norm_(model.parameters(), config.max_grad_norm)
+                    scaler.step(optimizer)
+                    scaler.update()
+                    optimizer.zero_grad(set_to_none=True)
 
             scheduler.step()
 
@@ -318,6 +439,9 @@ def train(config: TrainConfig) -> Path:
                     outputs = [post_pred(item) for item in decollate_batch(outputs)]
                     labels = [post_label(item) for item in decollate_batch(labels)]
                     metric(y_pred=outputs, y=labels)
+
+            if device.type == "cuda":
+                torch.cuda.empty_cache()
 
             train_dice_scores = train_metric.aggregate().detach().cpu()
             train_mean_dice = float(train_dice_scores.mean().item())
@@ -411,7 +535,10 @@ def train(config: TrainConfig) -> Path:
                 break
     except Exception as exc:
         status = "failed"
-        error_message = str(exc)
+        error_message = traceback.format_exc()
+        tb_path = output_dir / "error.log"
+        tb_path.write_text(error_message, encoding="utf-8")
+        print(f"ERROR: {exc}\nFull traceback written to {tb_path}")
         raise
     finally:
         run_summary = {
@@ -462,7 +589,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--batch-size", type=int, default=2)
     parser.add_argument("--patch-size", type=int, nargs=3, default=(128, 384, 128))
     parser.add_argument("--learning-rate", type=float, default=1e-3)
-    parser.add_argument("--weight-decay", type=float, default=1e-5)
+    parser.add_argument("--weight-decay", type=float, default=1e-4)
     parser.add_argument("--num-classes", type=int, default=7)
     parser.add_argument("--val-fraction", type=float, default=0.25)
     parser.add_argument("--num-workers", type=int, default=0,
@@ -496,10 +623,36 @@ def build_arg_parser() -> argparse.ArgumentParser:
         default=50,
         help="Do not early-stop before this epoch count.",
     )
+    parser.add_argument(
+        "--grad-accumulation-steps",
+        type=int,
+        default=4,
+        help="Accumulate gradients over N batches before each optimizer step "
+             "(simulates N× larger batch size; default: 4).",
+    )
+    parser.add_argument(
+        "--warmup-epochs",
+        type=int,
+        default=20,
+        help="Linear LR warmup duration in epochs before cosine decay (default: 20).",
+    )
+    parser.add_argument(
+        "--max-grad-norm",
+        type=float,
+        default=1.0,
+        help="Max gradient norm for clipping; 0 disables clipping (default: 1.0).",
+    )
+    parser.add_argument(
+        "--dropout-path-rate",
+        type=float,
+        default=0.1,
+        help="Stochastic depth drop-path rate for SwinUNETR (default: 0.1).",
+    )
     parser.add_argument("--wandb", action="store_true", help="Enable Weights & Biases logging.")
     parser.add_argument("--wandb-project", default="bp-custom-model", metavar="PROJECT", help="W&B project name.")
     parser.add_argument("--wandb-entity", default=None, metavar="ENTITY", help="W&B entity / team name.")
     parser.add_argument("--wandb-run-name", default=None, metavar="NAME", help="Display name for this W&B run.")
+    parser.add_argument("--debug-data", action="store_true", help="Print dataset split and label diagnostics.")
     return parser
 
 
@@ -527,10 +680,15 @@ def parse_args(argv=None) -> TrainConfig:
         early_stopping_patience=args.early_stopping_patience,
         early_stopping_min_delta=args.early_stopping_min_delta,
         early_stopping_min_epochs=args.early_stopping_min_epochs,
+        grad_accumulation_steps=args.grad_accumulation_steps,
+        warmup_epochs=args.warmup_epochs,
+        max_grad_norm=args.max_grad_norm,
+        dropout_path_rate=args.dropout_path_rate,
         wandb=args.wandb,
         wandb_project=args.wandb_project,
         wandb_entity=args.wandb_entity,
         wandb_run_name=args.wandb_run_name,
+        debug_data=args.debug_data,
     )
 
 

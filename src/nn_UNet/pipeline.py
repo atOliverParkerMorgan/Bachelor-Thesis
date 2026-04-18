@@ -815,10 +815,17 @@ def build_parser() -> argparse.ArgumentParser:
         "--early-stopping-min-epochs", type=int, default=50,
         help="Do not early-stop before this epoch count.",
     )
+    custom_train_p.add_argument(
+        "--grad-accumulation-steps",
+        type=int,
+        default=4,
+        help="Accumulate gradients over N batches before each optimizer step (default: 4).",
+    )
     custom_train_p.add_argument("--wandb", action="store_true", help="Enable Weights & Biases logging.")
     custom_train_p.add_argument("--wandb-project", default="bp-custom-model", metavar="PROJECT", help="W&B project name.")
     custom_train_p.add_argument("--wandb-entity", default=None, metavar="ENTITY", help="W&B entity / team name.")
     custom_train_p.add_argument("--wandb-run-name", default=None, metavar="NAME", help="Display name for this W&B run.")
+    custom_train_p.add_argument("--debug-data", action="store_true", help="Print dataset split and label diagnostics.")
     add_clusterfit_arguments(custom_train_p)
 
     return parser
@@ -1133,6 +1140,7 @@ def run_custom_train(args: argparse.Namespace, env: Dict[str, str]) -> None:
         "--early-stopping-patience", str(args.early_stopping_patience),
         "--early-stopping-min-delta", str(args.early_stopping_min_delta),
         "--early-stopping-min-epochs", str(args.early_stopping_min_epochs),
+        "--grad-accumulation-steps", str(args.grad_accumulation_steps),
     ]
     if getattr(args, "no_amp", False):
         cmd.append("--no-amp")
@@ -1143,6 +1151,8 @@ def run_custom_train(args: argparse.Namespace, env: Dict[str, str]) -> None:
             cmd.extend(["--wandb-entity", str(args.wandb_entity)])
         if getattr(args, "wandb_run_name", None):
             cmd.extend(["--wandb-run-name", str(args.wandb_run_name)])
+    if getattr(args, "debug_data", False):
+        cmd.append("--debug-data")
 
     log(f"Custom model training: {' '.join(cmd)}")
     try:

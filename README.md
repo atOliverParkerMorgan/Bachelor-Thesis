@@ -1,26 +1,29 @@
-# BP
-
-Simple workflow for wood-defect segmentation and nnU-Net training.
-
-## 1) Where to put data
-
-### Ground truth for extraction and segmentation pipeline
-
-Put your source zip files here:
-
-- src/ground_truth
-
-Example:
-
-```text
-src/ground_truth/
-	dub1.zip
-	dub2.zip
-	dub5.zip
+```bash
+./run_nnunet custom-train \
+	--clusterfit \
+	--slurm-partition gpu \
+	--slurm-cpus-per-task 8 \
+	--slurm-gpu a100_40 \
+	--slurm-time 24:00:00 \
+	--image-dir ./src/nn_UNet/nnunet_data/nnUNet_raw/Dataset002_BPWoodDefectsSplit/imagesTr \
+	--label-dir ./src/nn_UNet/nnunet_data/nnUNet_raw/Dataset002_BPWoodDefectsSplit/labelsTr \
+	--output-dir ./output/custom_model \
+	--epochs 1000 \
+	--batch-size 2 \
+	--patch-size 128 384 128 \
+	--learning-rate 1e-3 \
+	--weight-decay 1e-4 \
+	--num-classes 7 \
+	--val-fraction 0.25 \
+	--rare-class-weight 30.0 \
+	--num-workers 4 \
+	--grad-accumulation-steps 4 \
+	--warmup-epochs 20 \
+	--max-grad-norm 1.0 \
+	--dropout-path-rate 0.1 \
+	--wandb \
+	--wandb-project "bp-custom-model"
 ```
-
-### Data for nnU-Net training input
-
 Put extracted per-tree folders here:
 
 
@@ -284,13 +287,15 @@ Label 6 (`Poškození hmyzem`) is boosted with the same three-layer strategy use
 | Batch size (crops / volume) | `2` |
 | Optimizer | AdamW |
 | Learning rate | `1e-3` |
-| Weight decay | `1e-5` |
-| Scheduler | Cosine annealing |
+| Weight decay | `1e-4` |
+| Scheduler | Linear warmup (20 ep) + cosine annealing |
 | Epochs | `1000` |
 | Classes | `7` |
 | Intensity clipping | `[−1000, 3000] → [0, 1]` |
 | Rare-class oversample | `8×` case-level |
-| Rare-class CE weight | `30×` (label 6) |
+| Rare-class CE weight | `30×` (label 6); knot 5.5×, rot 10×, bark 3×, crack 7× |
+| Stochastic depth | `drop_path_rate=0.1` |
+| Grad clipping | `max_norm=1.0` |
 
 ### Local run
 
@@ -315,6 +320,30 @@ Uses `./run_nnunet custom-train`. Image/label directories now default to
 `nnunet_root/nnUNet_raw/Dataset002_BPWoodDefectsSplit/{imagesTr,labelsTr}`.
 
 ```bash
+poetry run python -m src.custom_model.train \
+	--clusterfit \
+    --slurm-partition gpu \
+    --slurm-cpus-per-task 8 \
+    --slurm-gpu a100_40 \
+    --slurm-time 24:00:00 \
+    --image-dir ./src/nn_UNet/nnunet_data/nnUNet_raw/Dataset002_BPWoodDefectsSplit/imagesTr \
+    --label-dir ./src/nn_UNet/nnunet_data/nnUNet_raw/Dataset002_BPWoodDefectsSplit/labelsTr \
+    --output-dir ./output/custom_model \
+    --epochs 1000 \
+    --batch-size 1 \
+    --patch-size 128 384 128 \
+    --learning-rate 1e-3 \
+    --num-classes 7 \
+	--debug-data
+    --val-fraction 0.25 \
+    --rare-class-weight 8.0 \
+    --num-workers 4 \
+    --grad-accumulation-steps 4 \
+    --wandb \
+    --wandb-project "bp-custom-model"
+
+
+
 ./run_nnunet custom-train \
     --clusterfit \
     --slurm-partition gpu \
@@ -324,12 +353,19 @@ Uses `./run_nnunet custom-train`. Image/label directories now default to
     --epochs 1000 \
     --batch-size 2 \
     --patch-size 128 384 128 \
-	--learning-rate 1e-3 \
-	--early-stopping-patience 50 \
-	--early-stopping-min-delta 1e-4 \
-	--early-stopping-min-epochs 50 \
-	--wandb \
-	--wandb-project "bp-custom-model"
+    --learning-rate 1e-3 \
+    --weight-decay 1e-4 \
+    --rare-class-weight 30.0 \
+    --num-workers 4 \
+    --grad-accumulation-steps 4 \
+    --warmup-epochs 20 \
+    --max-grad-norm 1.0 \
+    --dropout-path-rate 0.1 \
+    --early-stopping-patience 50 \
+    --early-stopping-min-delta 1e-4 \
+    --early-stopping-min-epochs 50 \
+    --wandb \
+    --wandb-project "bp-custom-model"
 ```
 
 If you want to be explicit, you can also pass:

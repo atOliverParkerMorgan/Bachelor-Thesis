@@ -1,0 +1,132 @@
+[
+    {
+        "train": [
+            "dub_11_part0",
+            "dub_11_part1",
+            "dub_11_part2",
+            "dub_11_part4",
+            "dub_1_part0",
+            "dub_1_part1",
+            "dub_1_part2",
+            "dub_1_part4",
+            "dub_37_part0",
+            "dub_37_part1",
+            "dub_37_part2",
+            "dub_37_part4",
+            "dub_5_part0",
+            "dub_5_part2",
+            "dub_5_part3",
+            "dub_5_part4"
+        ],
+        "val": [
+            "dub_11_part3",
+            "dub_1_part3",
+            "dub_37_part3",
+            "dub_5_part1"
+        ]
+    },
+    {
+        "train": [
+            "dub_11_part1",
+            "dub_11_part2",
+            "dub_11_part3",
+            "dub_11_part4",
+            "dub_1_part0",
+            "dub_1_part1",
+            "dub_1_part2",
+            "dub_1_part3",
+            "dub_1_part4",
+            "dub_37_part1",
+            "dub_37_part3",
+            "dub_37_part4",
+            "dub_5_part1",
+            "dub_5_part2",
+            "dub_5_part3",
+            "dub_5_part4"
+        ],
+        "val": [
+            "dub_11_part0",
+            "dub_37_part0",
+            "dub_37_part2",
+            "dub_5_part0"
+        ]
+    },
+    {
+        "train": [
+            "dub_11_part0",
+            "dub_11_part1",
+            "dub_11_part2",
+            "dub_11_part3",
+            "dub_11_part4",
+            "dub_1_part0",
+            "dub_1_part3",
+            "dub_1_part4",
+            "dub_37_part0",
+            "dub_37_part2",
+            "dub_37_part3",
+            "dub_37_part4",
+            "dub_5_part0",
+            "dub_5_part1",
+            "dub_5_part3",
+            "dub_5_part4"
+        ],
+        "val": [
+            "dub_1_part1",
+            "dub_1_part2",
+            "dub_37_part1",
+            "dub_5_part2"
+        ]
+    },
+    {
+        "train": [
+            "dub_11_part0",
+            "dub_11_part1",
+            "dub_11_part2",
+            "dub_11_part3",
+            "dub_11_part4",
+            "dub_1_part0",
+            "dub_1_part1",
+            "dub_1_part2",
+            "dub_1_part3",
+            "dub_37_part0",
+            "dub_37_part1",
+            "dub_37_part2",
+            "dub_37_part3",
+            "dub_5_part0",
+            "dub_5_part1",
+            "dub_5_part2"
+        ],
+        "val": [
+            "dub_1_part4",
+            "dub_37_part4",
+            "dub_5_part3",
+            "dub_5_part4"
+        ]
+    },
+    {
+        "train": [
+            "dub_11_part0",
+            "dub_11_part3",
+            "dub_1_part1",
+            "dub_1_part2",
+            "dub_1_part3",
+            "dub_1_part4",
+            "dub_37_part0",
+            "dub_37_part1",
+            "dub_37_part2",
+            "dub_37_part3",
+            "dub_37_part4",
+            "dub_5_part0",
+            "dub_5_part1",
+            "dub_5_part2",
+            "dub_5_part3",
+            "dub_5_part4"
+        ],
+        "val": [
+            "dub_11_part1",
+            "dub_11_part2",
+            "dub_11_part4",
+            "dub_1_part0"
+        ]
+    }
+]

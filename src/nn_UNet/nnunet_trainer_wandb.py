@@ -96,7 +96,7 @@ class _RareClassBinaryDice(nn.Module):
     full-resolution head (index 0) is used.
     """
 
-    def __init__(self, rare_label_idx: int, smooth: float = 1e-5) -> None:
+    def __init__(self, rare_label_idx: int, smooth: float = 1.0) -> None:
         super().__init__()
         self.rare_label_idx = rare_label_idx
         self.smooth = smooth
@@ -108,7 +108,7 @@ class _RareClassBinaryDice(nn.Module):
         logits : [B, C, ...]  — raw network logits
         target : [B, 1, ...]  — integer segmentation map
         """
-        probs = torch.softmax(logits, dim=1)[:, self.rare_label_idx]
+        probs = torch.softmax(logits.float(), dim=1)[:, self.rare_label_idx]
         mask  = (target.squeeze(1) == self.rare_label_idx).float()
         tp = (probs * mask).sum()
         fp = (probs * (1.0 - mask)).sum()
@@ -149,6 +149,12 @@ class _CompoundLoss(nn.Module):
 
 class nnUNetTrainerWandb(nnUNetTrainer):
     """nnU-Net trainer that logs metrics to Weights & Biases after every epoch."""
+
+    def initialize(self) -> None:
+        env_lr = os.environ.get("NNUNET_INITIAL_LR")
+        if env_lr is not None:
+            self.initial_lr = float(env_lr)
+        super().initialize()
 
     def on_train_start(self) -> None:
         super().on_train_start()
@@ -359,8 +365,8 @@ class nnUNetTrainerRareClassBoostWandb(nnUNetTrainerWandb):
     # ── tuneable knobs ─────────────────────────────────────────────────────────
     RARE_LABEL_IDX:         int   = 6     # Poškození hmyzem (dataset.json index)
     CASE_OVERSAMPLE_FACTOR: int   = 8     # extra copies of rare cases per epoch
-    CE_RARE_CLASS_WEIGHT:   float = 30.0  # CE loss weight for the rare class
-    RARE_DICE_AUX_WEIGHT:   float = 5.0   # weight of auxiliary rare-class Dice term
+    CE_RARE_CLASS_WEIGHT:   float = 8.0   # CE loss weight for the rare class
+    RARE_DICE_AUX_WEIGHT:   float = 1.0   # weight of auxiliary rare-class Dice term
 
     # More aggressively sample foreground-containing patches (nnUNet built-in)
     oversample_foreground_percent: float = 0.67  # default is 0.33
