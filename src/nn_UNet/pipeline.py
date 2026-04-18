@@ -94,6 +94,12 @@ def ensure_env(nnunet_root: Path) -> Dict[str, str]:
 def apply_runtime_env_overrides(env: Dict[str, str], args: argparse.Namespace) -> None:
     env["PYTHONUNBUFFERED"] = "1"
 
+    # Reduce CUDA allocator fragmentation for 3-D patch training.
+    # Without this, large reserved-but-unallocated blocks cause spurious OOM
+    # even when total free VRAM is sufficient.
+    if getattr(args, "command", None) == "custom-train":
+        env.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
+
     save_every = getattr(args, "save_every", None)
     if save_every is not None:
         env["NNUNET_SAVE_EVERY"] = str(save_every)
@@ -784,7 +790,7 @@ def build_parser() -> argparse.ArgumentParser:
     custom_train_p.add_argument("--batch-size", type=int, default=2)
     custom_train_p.add_argument("--patch-size", type=int, nargs=3, default=[128, 384, 128])
     custom_train_p.add_argument("--learning-rate", type=float, default=1e-3)
-    custom_train_p.add_argument("--weight-decay", type=float, default=1e-5)
+    custom_train_p.add_argument("--weight-decay", type=float, default=1e-4)
     custom_train_p.add_argument("--num-classes", type=int, default=7)
     custom_train_p.add_argument("--val-fraction", type=float, default=0.25)
     custom_train_p.add_argument("--num-workers", type=int, default=4)
@@ -820,6 +826,24 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         default=4,
         help="Accumulate gradients over N batches before each optimizer step (default: 4).",
+    )
+    custom_train_p.add_argument(
+        "--warmup-epochs",
+        type=int,
+        default=20,
+        help="Linear LR warmup duration in epochs before cosine decay (default: 20).",
+    )
+    custom_train_p.add_argument(
+        "--max-grad-norm",
+        type=float,
+        default=1.0,
+        help="Max gradient norm for clipping; 0 disables clipping (default: 1.0).",
+    )
+    custom_train_p.add_argument(
+        "--dropout-path-rate",
+        type=float,
+        default=0.1,
+        help="Stochastic depth drop-path rate for SwinUNETR (default: 0.1).",
     )
     custom_train_p.add_argument("--wandb", action="store_true", help="Enable Weights & Biases logging.")
     custom_train_p.add_argument("--wandb-project", default="bp-custom-model", metavar="PROJECT", help="W&B project name.")
@@ -1141,6 +1165,9 @@ def run_custom_train(args: argparse.Namespace, env: Dict[str, str]) -> None:
         "--early-stopping-min-delta", str(args.early_stopping_min_delta),
         "--early-stopping-min-epochs", str(args.early_stopping_min_epochs),
         "--grad-accumulation-steps", str(args.grad_accumulation_steps),
+        "--warmup-epochs", str(args.warmup_epochs),
+        "--max-grad-norm", str(args.max_grad_norm),
+        "--dropout-path-rate", str(args.dropout_path_rate),
     ]
     if getattr(args, "no_amp", False):
         cmd.append("--no-amp")
@@ -1176,6 +1203,7 @@ def submit_to_clusterfit(args: argparse.Namespace, env: Dict[str, str]) -> None:
         "NNUNET_PRETRAINED_WEIGHTS", "NNUNET_SKIP_ARCH_PLOT", "nnUNet_compile", "nnUNet_n_proc_DA",
         "OMP_NUM_THREADS", "MKL_NUM_THREADS", "OPENBLAS_NUM_THREADS", "NUMEXPR_NUM_THREADS",
         "WANDB_PROJECT", "WANDB_ENTITY", "WANDB_RUN_NAME", "WANDB_API_KEY",
+        "PYTORCH_CUDA_ALLOC_CONF",
     ):
         value = env.get(key)
         if value:
