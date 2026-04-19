@@ -108,6 +108,10 @@ def apply_runtime_env_overrides(env: Dict[str, str], args: argparse.Namespace) -
     if initial_lr is not None:
         env["NNUNET_INITIAL_LR"] = str(initial_lr)
 
+    optimizer = getattr(args, "optimizer", None)
+    if optimizer is not None:
+        env["NNUNET_OPTIMIZER"] = optimizer
+
     if getattr(args, "skip_arch_plot", False):
         env["NNUNET_SKIP_ARCH_PLOT"] = "1"
 
@@ -609,6 +613,12 @@ def build_parser() -> argparse.ArgumentParser:
     train.add_argument("--skip-arch-plot", action="store_true")
     train.add_argument("--initial-lr", type=float, default=1e-3)
     train.add_argument(
+        "--optimizer",
+        choices=["sgd", "adam", "adamw"],
+        default=None,
+        help="Optimizer override (default: sgd, nnUNet built-in). Use adam/adamw with --initial-lr 1e-4.",
+    )
+    train.add_argument(
         "--regularize-arch",
         action="store_true",
         help="Patch the selected plans JSON before training (dropout + smaller model).",
@@ -720,6 +730,12 @@ def build_parser() -> argparse.ArgumentParser:
     all_cmd.add_argument("--skip-arch-plot", action="store_true")
     all_cmd.add_argument("--initial-lr", type=float, default=1e-3)
     all_cmd.add_argument(
+        "--optimizer",
+        choices=["sgd", "adam", "adamw"],
+        default=None,
+        help="Optimizer override (default: sgd). Use adam/adamw with --initial-lr 1e-4.",
+    )
+    all_cmd.add_argument(
         "--regularize-arch",
         action="store_true",
         help="Patch the selected plans JSON before training (dropout + smaller model).",
@@ -802,8 +818,8 @@ def build_parser() -> argparse.ArgumentParser:
         help="Label index to boost (default: 6 = Poškození hmyzem).",
     )
     custom_train_p.add_argument(
-        "--rare-class-weight", type=float, default=30.0,
-        help="CE loss weight multiplier for the rare class (default: 30).",
+        "--rare-class-weight", type=float, default=10.0,
+        help="CE loss weight multiplier for the rare class (default: 10).",
     )
     custom_train_p.add_argument(
         "--oversample-factor", type=int, default=8,
@@ -849,6 +865,13 @@ def build_parser() -> argparse.ArgumentParser:
     custom_train_p.add_argument("--wandb-project", default="bp-custom-model", metavar="PROJECT", help="W&B project name.")
     custom_train_p.add_argument("--wandb-entity", default=None, metavar="ENTITY", help="W&B entity / team name.")
     custom_train_p.add_argument("--wandb-run-name", default=None, metavar="NAME", help="Display name for this W&B run.")
+    custom_train_p.add_argument(
+        "--cache-rate",
+        type=float,
+        default=0.0,
+        help="Fraction of dataset to cache in RAM between epochs (0=off, 1.0=full cache). "
+             "Set to 1.0 on A100 cluster nodes to eliminate per-epoch disk I/O.",
+    )
     custom_train_p.add_argument("--debug-data", action="store_true", help="Print dataset split and label diagnostics.")
     add_clusterfit_arguments(custom_train_p)
 
@@ -1168,6 +1191,7 @@ def run_custom_train(args: argparse.Namespace, env: Dict[str, str]) -> None:
         "--warmup-epochs", str(args.warmup_epochs),
         "--max-grad-norm", str(args.max_grad_norm),
         "--dropout-path-rate", str(args.dropout_path_rate),
+        "--cache-rate", str(args.cache_rate),
     ]
     if getattr(args, "no_amp", False):
         cmd.append("--no-amp")
@@ -1197,9 +1221,9 @@ def submit_to_clusterfit(args: argparse.Namespace, env: Dict[str, str]) -> None:
 
     slurm_env: Dict[str, str] = {}
     for key in (
-        "PATH", "HOME", "LANG", "LC_ALL", "LD_LIBRARY_PATH", "VIRTUAL_ENV", 
-        "PYTHONPATH", "PYTHONUNBUFFERED", "nnUNet_raw", "nnUNet_preprocessed", 
-        "nnUNet_results", "NNUNET_SAVE_EVERY", "NNUNET_INITIAL_LR",
+        "PATH", "HOME", "LANG", "LC_ALL", "LD_LIBRARY_PATH", "VIRTUAL_ENV",
+        "PYTHONPATH", "PYTHONUNBUFFERED", "nnUNet_raw", "nnUNet_preprocessed",
+        "nnUNet_results", "NNUNET_SAVE_EVERY", "NNUNET_INITIAL_LR", "NNUNET_OPTIMIZER",
         "NNUNET_PRETRAINED_WEIGHTS", "NNUNET_SKIP_ARCH_PLOT", "nnUNet_compile", "nnUNet_n_proc_DA",
         "OMP_NUM_THREADS", "MKL_NUM_THREADS", "OPENBLAS_NUM_THREADS", "NUMEXPR_NUM_THREADS",
         "WANDB_PROJECT", "WANDB_ENTITY", "WANDB_RUN_NAME", "WANDB_API_KEY",

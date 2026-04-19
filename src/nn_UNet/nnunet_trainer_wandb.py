@@ -156,6 +156,23 @@ class nnUNetTrainerWandb(nnUNetTrainer):
             self.initial_lr = float(env_lr)
         super().initialize()
 
+    def configure_optimizers(self):
+        optimizer_name = os.environ.get("NNUNET_OPTIMIZER", "sgd").lower()
+        if optimizer_name in ("adam", "adamw"):
+            cls = torch.optim.AdamW if optimizer_name == "adamw" else torch.optim.Adam
+            optimizer = cls(
+                self.network.parameters(),
+                lr=self.initial_lr,
+                weight_decay=self.weight_decay,
+            )
+            from nnunetv2.training.lr_scheduler.polylr import PolyLRScheduler
+            lr_scheduler = PolyLRScheduler(optimizer, self.initial_lr, self.num_epochs)
+            self.print_to_log_file(
+                f"Optimizer: {cls.__name__}  lr={self.initial_lr}  wd={self.weight_decay}"
+            )
+            return optimizer, lr_scheduler
+        return super().configure_optimizers()
+
     def on_train_start(self) -> None:
         super().on_train_start()
         try:
@@ -175,6 +192,7 @@ class nnUNetTrainerWandb(nnUNetTrainer):
         config = {
             "configuration": self.configuration_name,
             "fold": self.fold,
+            "optimizer": os.environ.get("NNUNET_OPTIMIZER", "sgd"),
             "initial_lr": self.initial_lr,
             "weight_decay": self.weight_decay,
             "num_epochs": self.num_epochs,

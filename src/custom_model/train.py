@@ -30,7 +30,7 @@ class TrainConfig:
     label_dir: str
     output_dir: str = "./output/custom_model"
     epochs: int = 1000
-    batch_size: int = 2
+    batch_size: int = 4
     patch_size: tuple[int, int, int] = (128, 384, 128)
     learning_rate: float = 1e-3
     weight_decay: float = 1e-4

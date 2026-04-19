@@ -353,6 +353,7 @@ poetry run python -m src.custom_model.train \
     --epochs 1000 \
     --batch-size 2 \
     --patch-size 128 384 128 \
+    --sliding-window-overlap 0.75 \
     --learning-rate 1e-3 \
     --weight-decay 1e-4 \
     --rare-class-weight 30.0 \
@@ -361,6 +362,7 @@ poetry run python -m src.custom_model.train \
     --warmup-epochs 20 \
     --max-grad-norm 1.0 \
     --dropout-path-rate 0.1 \
+    --cache-rate 1.0 \
     --early-stopping-patience 50 \
     --early-stopping-min-delta 1e-4 \
     --early-stopping-min-epochs 50 \

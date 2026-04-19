@@ -168,7 +168,13 @@ class SlurmJobSubmitter:
         cmd.append(str(script_path))
         
         print(f"$ {' '.join(cmd)}")
-        result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        if result.returncode != 0:
+            raise RuntimeError(
+                f"sbatch failed (exit {result.returncode}):\n"
+                f"  stdout: {result.stdout.strip()}\n"
+                f"  stderr: {result.stderr.strip()}"
+            )
         
         # Parse job ID from output
         output = result.stdout.strip()

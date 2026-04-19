@@ -131,21 +131,17 @@ def analyse_volume(
             results[cls] = {"voxel_count": 0, "n_components_3d": 0, "shape_samples": []}
             continue
 
-        # 3-D connected components (background class skipped for speed)
-        if cls == 0:
-            n_comp = 0
-        else:
-            _, n_comp = ndi.label(binary)
+        # 3-D connected components
+        _, n_comp = ndi.label(binary)
 
         # 2-D shape sampling: only slices that contain the class
         shape_samples: List[dict] = []
-        if cls != 0:
-            z_indices = np.where(binary.any(axis=(1, 2)))[0]
-            if len(z_indices) > _MAX_SLICES_PER_VOLUME:
-                rng = np.random.default_rng(seed=42)
-                z_indices = rng.choice(z_indices, _MAX_SLICES_PER_VOLUME, replace=False)
-            for z in z_indices:
-                shape_samples.extend(_shape_stats_from_slice(binary[z]))
+        z_indices = np.where(binary.any(axis=(1, 2)))[0]
+        if len(z_indices) > _MAX_SLICES_PER_VOLUME:
+            rng = np.random.default_rng(seed=42)
+            z_indices = rng.choice(z_indices, _MAX_SLICES_PER_VOLUME, replace=False)
+        for z in z_indices:
+            shape_samples.extend(_shape_stats_from_slice(binary[z]))
 
         results[cls] = {
             "voxel_count":      voxel_count,
@@ -191,9 +187,8 @@ def analyse_dataset(labels_dir: Path, max_files: int | None = None) -> List[dict
             class_voxels[cls] += data["voxel_count"]
             if data["voxel_count"] > 0:
                 presence[cls] += 1
-            if cls != 0:
-                n_comp_per_vol[cls].append(data["n_components_3d"])
-                all_shapes[cls].extend(data["shape_samples"])
+            n_comp_per_vol[cls].append(data["n_components_3d"])
+            all_shapes[cls].extend(data["shape_samples"])
 
     print()  # clear \r line
 
@@ -235,8 +230,6 @@ def analyse_dataset(labels_dir: Path, max_files: int | None = None) -> List[dict
 
     # -- detailed per-class breakdown --
     for cls, name in LABEL_NAMES.items():
-        if cls == 0:
-            continue
         shapes = all_shapes[cls]
         comps  = n_comp_per_vol[cls]
         print(f"\n  -- {name} --")
@@ -298,7 +291,7 @@ def main() -> None:
 
     if args.csv and rows:
         out = Path(args.csv)
-        with out.open("w", newline="") as f:
+        with out.open("w", newline="", encoding="utf-8") as f:
             writer = csv.DictWriter(f, fieldnames=rows[0].keys())
             writer.writeheader()
             writer.writerows(rows)

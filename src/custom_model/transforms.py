@@ -9,9 +9,10 @@ from monai.transforms import (
     RandCropByLabelClassesd,
     RandFlipd,
     RandGaussianNoised,
-    RandGaussianSmoothd,
     RandScaleIntensityd,
-    RandZoomd,
+    Rand3DElasticd,
+    RandCoarseDropoutd,
+    RandHistogramShiftd,
     ScaleIntensityRanged,
     SpatialPadd,
 )
@@ -59,7 +60,7 @@ def get_train_transforms(
             ScaleIntensityRanged(
                 keys="image",
                 a_min=-1000,
-                a_max=3000,
+                a_max=500,  # Adjusted to wood density to maximize texture contrast
                 b_min=0.0,
                 b_max=1.0,
                 clip=True,
@@ -79,6 +80,15 @@ def get_train_transforms(
             RandFlipd(keys=("image", "label"), prob=0.5, spatial_axis=0),
             RandFlipd(keys=("image", "label"), prob=0.5, spatial_axis=1),
             RandFlipd(keys=("image", "label"), prob=0.5, spatial_axis=2),
+            # Added 3D Elastic deformation to simulate organic, asymmetrical wood growth
+            Rand3DElasticd(
+                keys=("image", "label"),
+                mode=("bilinear", "nearest"),
+                prob=0.2,
+                sigma_range=(5, 7),
+                magnitude_range=(50, 150),
+                padding_mode="reflection",
+            ),
             # mode=("bilinear", "nearest") is critical: bilinear on labels
             # creates blended voxel values that don't map to any valid class.
             RandAffined(
@@ -88,21 +98,21 @@ def get_train_transforms(
                 rotate_range=(0.15, 0.15, 0.15),
                 shear_range=(0.05, 0.05, 0.05),
                 translate_range=(10, 10, 10),
-                scale_range=(0.1, 0.1, 0.1),
-                padding_mode="border",
+                scale_range=(0.2, 0.2, 0.2),    # Set to 0.2 for anisotropic scaling
+                padding_mode="reflection",      # Changed to reflection to prevent edge streaks
             ),
-            # Zoom ±15 %: teaches the model to find small structures (rot 108 px,
-            # insect 68 px) at multiple scales without distorting their shape.
-            RandZoomd(
+            # Drops out random small boxes. Forces the model to use context 
+            # to connect broken crack lines.
+            RandCoarseDropoutd(
                 keys=("image", "label"),
-                prob=0.15,
-                min_zoom=0.85,
-                max_zoom=1.15,
-                mode=("trilinear", "nearest"),
-                padding_mode="edge",
+                holes=5,
+                spatial_size=(16, 16, 16),
+                prob=0.2,
+                fill_value=0,
             ),
+            # Non-linear intensity shifts to help isolate low-density air gaps
+            RandHistogramShiftd(keys="image", num_control_points=10, prob=0.2),
             RandGaussianNoised(keys="image", prob=0.2, std=0.01),
-            RandGaussianSmoothd(keys="image", prob=0.15, sigma_x=(0.5, 1.5), sigma_y=(0.5, 1.5), sigma_z=(0.5, 1.5)),
             RandAdjustContrastd(keys="image", prob=0.2, gamma=(0.7, 1.5)),
             RandScaleIntensityd(keys="image", factors=0.1, prob=0.15),
             EnsureTyped(keys=("image", "label")),

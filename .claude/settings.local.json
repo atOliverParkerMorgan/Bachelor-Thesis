@@ -4,7 +4,9 @@
       "Bash(python -c ':*)",
       "Bash(echo \"exit:$?\")",
       "Bash(python3 -c ' *)",
-      "Bash(xargs grep *)"
+      "Bash(xargs grep *)",
+      "Bash(python -c \"from monai.losses import DiceFocalLoss; import inspect; print\\(list\\(inspect.signature\\(DiceFocalLoss.__init__\\).parameters.keys\\(\\)\\)\\)\")",
+      "Bash(python -c \"from src.custom_model.losses import get_loss; l = get_loss\\(\\); print\\('OK:', l\\)\")"
     ]
   }
 }
