@@ -112,6 +112,10 @@ def apply_runtime_env_overrides(env: Dict[str, str], args: argparse.Namespace) -
     if optimizer is not None:
         env["NNUNET_OPTIMIZER"] = optimizer
 
+    weight_decay = getattr(args, "weight_decay", None)
+    if weight_decay is not None:
+        env["NNUNET_WEIGHT_DECAY"] = str(weight_decay)
+
     if getattr(args, "skip_arch_plot", False):
         env["NNUNET_SKIP_ARCH_PLOT"] = "1"
 
@@ -619,6 +623,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Optimizer override (default: sgd, nnUNet built-in). Use adam/adamw with --initial-lr 1e-4.",
     )
     train.add_argument(
+        "--weight-decay",
+        type=float,
+        default=None,
+        help="Weight decay override for nnU-Net trainer optimizer (default: nnU-Net built-in).",
+    )
+    train.add_argument(
         "--regularize-arch",
         action="store_true",
         help="Patch the selected plans JSON before training (dropout + smaller model).",
@@ -736,6 +746,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Optimizer override (default: sgd). Use adam/adamw with --initial-lr 1e-4.",
     )
     all_cmd.add_argument(
+        "--weight-decay",
+        type=float,
+        default=None,
+        help="Weight decay override for nnU-Net trainer optimizer (default: nnU-Net built-in).",
+    )
+    all_cmd.add_argument(
         "--regularize-arch",
         action="store_true",
         help="Patch the selected plans JSON before training (dropout + smaller model).",
@@ -818,8 +834,8 @@ def build_parser() -> argparse.ArgumentParser:
         help="Label index to boost (default: 6 = Poškození hmyzem).",
     )
     custom_train_p.add_argument(
-        "--rare-class-weight", type=float, default=10.0,
-        help="CE loss weight multiplier for the rare class (default: 10).",
+        "--rare-class-weight", type=float, default=15.0,
+        help="CE loss weight multiplier for the rare class (default: 15).",
     )
     custom_train_p.add_argument(
         "--oversample-factor", type=int, default=8,
@@ -861,6 +877,44 @@ def build_parser() -> argparse.ArgumentParser:
         default=0.1,
         help="Stochastic depth drop-path rate for SwinUNETR (default: 0.1).",
     )
+    custom_train_p.add_argument(
+        "--model-name",
+        choices=["swinunetr", "swinunetr_v2", "unetr", "basicunetplusplus"],
+        default="swinunetr",
+        help="Custom model architecture to train (default: swinunetr).",
+    )
+    custom_train_p.add_argument(
+        "--model-feature-size",
+        type=int,
+        default=48,
+        help="Feature size for SwinUNETR/UNETR (default: 48).",
+    )
+    custom_train_p.add_argument(
+        "--unetr-hidden-size",
+        type=int,
+        default=768,
+        help="UNETR hidden transformer size (default: 768).",
+    )
+    custom_train_p.add_argument(
+        "--unetr-mlp-dim",
+        type=int,
+        default=3072,
+        help="UNETR MLP dimension (default: 3072).",
+    )
+    custom_train_p.add_argument(
+        "--unetr-num-heads",
+        type=int,
+        default=12,
+        help="UNETR number of attention heads (default: 12).",
+    )
+    custom_train_p.add_argument(
+        "--basicunet-features",
+        type=int,
+        nargs=6,
+        default=[32, 32, 64, 128, 256, 32],
+        metavar=("F0", "F1", "F2", "F3", "F4", "F5"),
+        help="Six channel sizes for BasicUNetPlusPlus (default: 32 32 64 128 256 32).",
+    )
     custom_train_p.add_argument("--wandb", action="store_true", help="Enable Weights & Biases logging.")
     custom_train_p.add_argument("--wandb-project", default="bp-custom-model", metavar="PROJECT", help="W&B project name.")
     custom_train_p.add_argument("--wandb-entity", default=None, metavar="ENTITY", help="W&B entity / team name.")
@@ -873,6 +927,18 @@ def build_parser() -> argparse.ArgumentParser:
              "Set to 1.0 on A100 cluster nodes to eliminate per-epoch disk I/O.",
     )
     custom_train_p.add_argument("--debug-data", action="store_true", help="Print dataset split and label diagnostics.")
+    custom_train_p.add_argument(
+        "--fold",
+        type=int,
+        default=None,
+        help="Fold index from splits_final.json (0-based). If not specified, uses stratified random split.",
+    )
+    custom_train_p.add_argument(
+        "--splits-json",
+        type=Path,
+        default="splits_final.json",
+        help="Path to splits JSON file for fold-based training (default: splits_final.json).",
+    )
     add_clusterfit_arguments(custom_train_p)
 
     return parser
@@ -1191,6 +1257,12 @@ def run_custom_train(args: argparse.Namespace, env: Dict[str, str]) -> None:
         "--warmup-epochs", str(args.warmup_epochs),
         "--max-grad-norm", str(args.max_grad_norm),
         "--dropout-path-rate", str(args.dropout_path_rate),
+        "--model-name", str(args.model_name),
+        "--model-feature-size", str(args.model_feature_size),
+        "--unetr-hidden-size", str(args.unetr_hidden_size),
+        "--unetr-mlp-dim", str(args.unetr_mlp_dim),
+        "--unetr-num-heads", str(args.unetr_num_heads),
+        "--basicunet-features", *[str(v) for v in args.basicunet_features],
         "--cache-rate", str(args.cache_rate),
     ]
     if getattr(args, "no_amp", False):
@@ -1204,6 +1276,9 @@ def run_custom_train(args: argparse.Namespace, env: Dict[str, str]) -> None:
             cmd.extend(["--wandb-run-name", str(args.wandb_run_name)])
     if getattr(args, "debug_data", False):
         cmd.append("--debug-data")
+    if getattr(args, "fold", None) is not None:
+        cmd.extend(["--fold", str(args.fold)])
+        cmd.extend(["--splits-json", str(args.splits_json)])
 
     log(f"Custom model training: {' '.join(cmd)}")
     try:
@@ -1224,6 +1299,7 @@ def submit_to_clusterfit(args: argparse.Namespace, env: Dict[str, str]) -> None:
         "PATH", "HOME", "LANG", "LC_ALL", "LD_LIBRARY_PATH", "VIRTUAL_ENV",
         "PYTHONPATH", "PYTHONUNBUFFERED", "nnUNet_raw", "nnUNet_preprocessed",
         "nnUNet_results", "NNUNET_SAVE_EVERY", "NNUNET_INITIAL_LR", "NNUNET_OPTIMIZER",
+        "NNUNET_WEIGHT_DECAY",
         "NNUNET_PRETRAINED_WEIGHTS", "NNUNET_SKIP_ARCH_PLOT", "nnUNet_compile", "nnUNet_n_proc_DA",
         "OMP_NUM_THREADS", "MKL_NUM_THREADS", "OPENBLAS_NUM_THREADS", "NUMEXPR_NUM_THREADS",
         "WANDB_PROJECT", "WANDB_ENTITY", "WANDB_RUN_NAME", "WANDB_API_KEY",

@@ -9,6 +9,8 @@ from monai.transforms import (
     RandCropByLabelClassesd,
     RandFlipd,
     RandGaussianNoised,
+    RandGaussianSharpend,
+    RandGaussianSmoothd,
     RandScaleIntensityd,
     Rand3DElasticd,
     RandCoarseDropoutd,
@@ -50,7 +52,8 @@ def get_train_transforms(
     for cls, r in _MINORITY_CROP_RATIOS.items():
         if cls < num_classes and cls != rare_label_idx:
             ratios[cls] = r
-    ratios[rare_label_idx] = float(rare_class_oversample)
+    if 0 <= rare_label_idx < num_classes:
+        ratios[rare_label_idx] = float(rare_class_oversample)
 
     return Compose(
         [
@@ -84,9 +87,9 @@ def get_train_transforms(
             Rand3DElasticd(
                 keys=("image", "label"),
                 mode=("bilinear", "nearest"),
-                prob=0.2,
-                sigma_range=(5, 7),
-                magnitude_range=(50, 150),
+                prob=0.15,
+                sigma_range=(5, 6),
+                magnitude_range=(30, 100),
                 padding_mode="reflection",
             ),
             # mode=("bilinear", "nearest") is critical: bilinear on labels
@@ -94,27 +97,44 @@ def get_train_transforms(
             RandAffined(
                 keys=("image", "label"),
                 mode=("bilinear", "nearest"),
-                prob=0.35,
-                rotate_range=(0.15, 0.15, 0.15),
+                prob=0.25,
+                rotate_range=(0.12, 0.12, 0.12),
                 shear_range=(0.05, 0.05, 0.05),
                 translate_range=(10, 10, 10),
-                scale_range=(0.2, 0.2, 0.2),    # Set to 0.2 for anisotropic scaling
+                scale_range=(0.15, 0.15, 0.15),
                 padding_mode="reflection",      # Changed to reflection to prevent edge streaks
             ),
-            # Drops out random small boxes. Forces the model to use context 
-            # to connect broken crack lines.
+            # Drops out random image boxes to improve robustness; keep labels
+            # untouched to avoid corrupting supervision targets.
             RandCoarseDropoutd(
-                keys=("image", "label"),
+                keys="image",
                 holes=5,
                 spatial_size=(16, 16, 16),
-                prob=0.2,
+                prob=0.15,
                 fill_value=0,
             ),
             # Non-linear intensity shifts to help isolate low-density air gaps
-            RandHistogramShiftd(keys="image", num_control_points=10, prob=0.2),
-            RandGaussianNoised(keys="image", prob=0.2, std=0.01),
-            RandAdjustContrastd(keys="image", prob=0.2, gamma=(0.7, 1.5)),
-            RandScaleIntensityd(keys="image", factors=0.1, prob=0.15),
+            RandHistogramShiftd(keys="image", num_control_points=10, prob=0.15),
+            RandGaussianNoised(keys="image", prob=0.15, std=0.015),
+            # Conservative edge emphasis can help thin crack boundaries.
+            RandGaussianSharpend(
+                keys="image",
+                sigma1_x=(0.5, 1.0),
+                sigma1_y=(0.5, 1.0),
+                sigma1_z=(0.5, 1.0),
+                prob=0.08,
+            ),
+            # Pair occasional sharpening with occasional blur to mimic
+            # reconstruction-kernel variability and avoid over-sharpen bias.
+            RandGaussianSmoothd(
+                keys="image",
+                sigma_x=(0.3, 0.8),
+                sigma_y=(0.3, 0.8),
+                sigma_z=(0.3, 0.8),
+                prob=0.08,
+            ),
+            RandAdjustContrastd(keys="image", prob=0.15, gamma=(0.75, 1.4)),
+            RandScaleIntensityd(keys="image", factors=0.08, prob=0.12),
             EnsureTyped(keys=("image", "label")),
         ]
     )
@@ -129,7 +149,7 @@ def get_val_transforms():
             ScaleIntensityRanged(
                 keys="image",
                 a_min=-1000,
-                a_max=3000,
+                a_max=500,
                 b_min=0.0,
                 b_max=1.0,
                 clip=True,

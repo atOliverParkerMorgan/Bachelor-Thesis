@@ -49,7 +49,11 @@ class WoodDefectDataset:
             classes = self._get_classes(str(lbl_path))
             self.case_classes[str(lbl_path)] = classes
 
-            entry = {"image": str(img_path), "label": str(lbl_path), "case_id": img_path.stem}
+            entry = {
+                "image": str(img_path),
+                "label": str(lbl_path),
+                "case_id": self._case_id_from_image_name(img_path.name),
+            }
             self.base_samples.append(entry)
             self.samples.append(entry)
 
@@ -83,6 +87,15 @@ class WoodDefectDataset:
             case_name = Path(image_name).stem
         case_name = re.sub(r"_0000(?:_\d+)?$", "", case_name)
         return f"{case_name}.nii.gz"
+
+    @staticmethod
+    def _case_id_from_image_name(image_name: str) -> str:
+        """Return a stable case identifier from an image filename."""
+        if image_name.endswith(".nii.gz"):
+            case_name = image_name[:-7]
+        else:
+            case_name = Path(image_name).stem
+        return re.sub(r"_0000(?:_\d+)?$", "", case_name)
 
     @staticmethod
     def _get_classes(label_path: str) -> frozenset[int]:

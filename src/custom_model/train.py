@@ -4,6 +4,7 @@ import argparse
 import csv
 import json
 import os
+import re
 import random
 import traceback
 from importlib import import_module
@@ -20,7 +21,7 @@ from monai.transforms import AsDiscrete
 
 from src.custom_model.dataset import WoodDefectDataset
 from src.custom_model.losses import get_loss
-from src.custom_model.model import get_swin_model
+from src.custom_model.model import get_model
 from src.custom_model.transforms import get_train_transforms, get_val_transforms
 
 
@@ -39,6 +40,8 @@ class TrainConfig:
     num_workers: int = 0
     cache_rate: float = 0.0
     seed: int = 42
+    fold: int | None = None
+    splits_json: str | None = None
     amp: bool = True
     sliding_window_overlap: float = 0.5
     # Rare-class (label 6 = Poškození hmyzem) handling
@@ -51,6 +54,12 @@ class TrainConfig:
     grad_accumulation_steps: int = 4
     warmup_epochs: int = 20
     max_grad_norm: float = 1.0
+    model_name: str = "swinunetr"
+    model_feature_size: int = 48
+    unetr_hidden_size: int = 768
+    unetr_mlp_dim: int = 3072
+    unetr_num_heads: int = 12
+    basicunet_features: tuple[int, int, int, int, int, int] = (32, 32, 64, 128, 256, 32)
     dropout_path_rate: float = 0.1
     wandb: bool = False
     wandb_project: str = "bp-custom-model"
@@ -65,6 +74,61 @@ def _seed_everything(seed: int) -> None:
     torch.manual_seed(seed)
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(seed)
+
+
+def _load_fold_split(
+    splits_json: str,
+    fold: int,
+    dataset: WoodDefectDataset,
+) -> tuple[list, list]:
+    """Load train/val split from splits_final.json by fold index.
+    
+    Maps case IDs in the split to actual dataset entries.
+    Handles both direct case names (DUB_1_part0) and nnUNet naming (_0000 suffix).
+    """
+    with open(splits_json) as f:
+        splits = json.load(f)
+    
+    if fold < 0 or fold >= len(splits):
+        raise ValueError(
+            f"Fold {fold} out of range for {len(splits)} folds in {splits_json}"
+        )
+    
+    split = splits[fold]
+    train_case_ids = {_normalize_split_case_id(case_id) for case_id in split["train"]}
+    val_case_ids = {_normalize_split_case_id(case_id) for case_id in split["val"]}
+    
+    # Build case_id → base_sample mapping from dataset
+    case_id_to_entry = {}
+    for entry in dataset.base_samples:
+        case_id = entry["case_id"]
+        case_id_to_entry[case_id] = entry
+    
+    train_cases = []
+    val_cases = []
+    
+    for case_id, entry in case_id_to_entry.items():
+        if case_id in train_case_ids:
+            train_cases.append(entry)
+        elif case_id in val_case_ids:
+            val_cases.append(entry)
+    
+    if not train_cases or not val_cases:
+        raise ValueError(
+            f"Fold {fold} split resulted in empty train or val set. "
+            f"Train: {len(train_cases)}, Val: {len(val_cases)}"
+        )
+    
+    return train_cases, val_cases
+
+
+def _normalize_split_case_id(case_id: str) -> str:
+    """Normalize split identifiers to match dataset case IDs."""
+    if case_id.endswith(".nii.gz"):
+        case_id = case_id[:-7]
+    else:
+        case_id = Path(case_id).stem
+    return re.sub(r"_0000(?:_\d+)?$", "", case_id)
 
 
 def _stratified_split(
@@ -233,6 +297,22 @@ def _plot_history(history: list[dict[str, Any]], output_dir: Path) -> None:
     plt.close(fig)
 
 
+def _select_primary_output(prediction: Any) -> torch.Tensor:
+    """Return a tensor from model output across MONAI output variants.
+
+    Some architectures/versions can emit list/tuple outputs (deep supervision).
+    Loss and metric code below expect a tensor, so we consistently take the
+    first prediction tensor.
+    """
+    if isinstance(prediction, torch.Tensor):
+        return prediction
+    if isinstance(prediction, (list, tuple)):
+        if not prediction:
+            raise ValueError("Model returned an empty list/tuple output.")
+        return _select_primary_output(prediction[0])
+    raise TypeError(f"Unsupported model output type: {type(prediction)!r}")
+
+
 def train(config: TrainConfig) -> Path:
     _seed_everything(config.seed)
 
@@ -250,11 +330,20 @@ def train(config: TrainConfig) -> Path:
         oversample_factor=config.oversample_factor,
     )
 
-    # Split on UNIQUE base cases only — no duplicates cross the train/val boundary.
-    # Stratified to guarantee every class present in ≥2 volumes appears in val.
-    train_base, val_cases = _stratified_split(
-        dataset.base_samples, dataset.case_classes, config.val_fraction, config.seed
-    )
+    # Load fold or use stratified split
+    if config.fold is not None:
+        if config.splits_json is None:
+            raise ValueError("--splits-json required when using --fold")
+        train_base, val_cases = _load_fold_split(
+            config.splits_json, config.fold, dataset
+        )
+        print(f"Loaded fold {config.fold} from {config.splits_json}")
+    else:
+        # Split on UNIQUE base cases only — no duplicates cross the train/val boundary.
+        # Stratified to guarantee every class present in ≥2 volumes appears in val.
+        train_base, val_cases = _stratified_split(
+            dataset.base_samples, dataset.case_classes, config.val_fraction, config.seed
+        )
 
     if config.debug_data:
         _debug_dataset_split(train_base, val_cases, dataset.case_classes)
@@ -325,11 +414,26 @@ def train(config: TrainConfig) -> Path:
         print("[debug] first val batch label values:", torch.unique(sample["label"]).tolist())
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model = get_swin_model(
+    model = get_model(
+        model_name=config.model_name,
         num_classes=config.num_classes,
         img_size=config.patch_size,
         dropout_path_rate=config.dropout_path_rate,
+        feature_size=config.model_feature_size,
+        hidden_size=config.unetr_hidden_size,
+        mlp_dim=config.unetr_mlp_dim,
+        num_heads=config.unetr_num_heads,
+        basicunet_features=config.basicunet_features,
     ).to(device)
+    print(
+        "Model: "
+        f"{config.model_name} "
+        f"(feature_size={config.model_feature_size}, "
+        f"unetr_hidden={config.unetr_hidden_size}, "
+        f"unetr_mlp={config.unetr_mlp_dim}, "
+        f"unetr_heads={config.unetr_num_heads}, "
+        f"basicunet_features={config.basicunet_features})"
+    )
     loss_fn = get_loss(
         num_classes=config.num_classes,
         rare_label_idx=config.rare_label_idx,
@@ -339,7 +443,7 @@ def train(config: TrainConfig) -> Path:
         num_classes=config.num_classes,
         rare_label_idx=config.rare_label_idx,
         rare_class_weight=config.rare_class_weight,
-    ).cpu()
+    ).to(device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=config.learning_rate, weight_decay=config.weight_decay)
 
     # Linear warmup for warmup_epochs, then cosine decay over the remainder.
@@ -391,7 +495,7 @@ def train(config: TrainConfig) -> Path:
                 labels = batch_data["label"].to(device)
 
                 with torch.amp.autocast("cuda", enabled=config.amp and device.type == "cuda"):
-                    outputs = model(inputs)
+                    outputs = _select_primary_output(model(inputs))
                     loss = loss_fn(outputs, labels) / accum_steps
 
                 if not torch.isfinite(loss):
@@ -431,11 +535,12 @@ def train(config: TrainConfig) -> Path:
                         inputs,
                         roi_size=config.patch_size,
                         sw_batch_size=1,
-                        predictor=model,
+                        predictor=lambda x: _select_primary_output(model(x)),
                         overlap=config.sliding_window_overlap,
                     )
+                    outputs = _select_primary_output(outputs)
 
-                    val_loss += float(val_loss_fn(outputs.detach().cpu(), labels.detach().cpu()).item())
+                    val_loss += float(val_loss_fn(outputs, labels).item())
                     outputs = [post_pred(item) for item in decollate_batch(outputs)]
                     labels = [post_label(item) for item in decollate_batch(labels)]
                     metric(y_pred=outputs, y=labels)
@@ -581,7 +686,7 @@ def train(config: TrainConfig) -> Path:
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Train the custom 3D SwinUNETR wood-defect model.")
+    parser = argparse.ArgumentParser(description="Train custom 3D wood-defect segmentation models.")
     parser.add_argument("--image-dir", required=True, help="Directory with input NIfTI volumes.")
     parser.add_argument("--label-dir", required=True, help="Directory with label NIfTI volumes.")
     parser.add_argument("--output-dir", default="./output/custom_model")
@@ -648,11 +753,61 @@ def build_arg_parser() -> argparse.ArgumentParser:
         default=0.1,
         help="Stochastic depth drop-path rate for SwinUNETR (default: 0.1).",
     )
+    parser.add_argument(
+        "--model-name",
+        choices=["swinunetr", "swinunetr_v2", "unetr", "basicunetplusplus"],
+        default="swinunetr",
+        help="Model architecture to train (default: swinunetr).",
+    )
+    parser.add_argument(
+        "--model-feature-size",
+        type=int,
+        default=48,
+        help="Feature size for SwinUNETR/UNETR (default: 48).",
+    )
+    parser.add_argument(
+        "--unetr-hidden-size",
+        type=int,
+        default=768,
+        help="UNETR hidden transformer size (default: 768).",
+    )
+    parser.add_argument(
+        "--unetr-mlp-dim",
+        type=int,
+        default=3072,
+        help="UNETR MLP dimension (default: 3072).",
+    )
+    parser.add_argument(
+        "--unetr-num-heads",
+        type=int,
+        default=12,
+        help="UNETR attention heads (default: 12).",
+    )
+    parser.add_argument(
+        "--basicunet-features",
+        type=int,
+        nargs=6,
+        default=(32, 32, 64, 128, 256, 32),
+        metavar=("F0", "F1", "F2", "F3", "F4", "F5"),
+        help="Six channel sizes for BasicUNetPlusPlus (default: 32 32 64 128 256 32).",
+    )
     parser.add_argument("--wandb", action="store_true", help="Enable Weights & Biases logging.")
     parser.add_argument("--wandb-project", default="bp-custom-model", metavar="PROJECT", help="W&B project name.")
     parser.add_argument("--wandb-entity", default=None, metavar="ENTITY", help="W&B entity / team name.")
     parser.add_argument("--wandb-run-name", default=None, metavar="NAME", help="Display name for this W&B run.")
     parser.add_argument("--debug-data", action="store_true", help="Print dataset split and label diagnostics.")
+    parser.add_argument(
+        "--fold",
+        type=int,
+        default=None,
+        help="Fold index from splits_final.json (0-based). If not specified, uses stratified random split.",
+    )
+    parser.add_argument(
+        "--splits-json",
+        type=str,
+        default="splits_final.json",
+        help="Path to splits JSON file for fold-based training (default: splits_final.json).",
+    )
     return parser
 
 
@@ -683,12 +838,20 @@ def parse_args(argv=None) -> TrainConfig:
         grad_accumulation_steps=args.grad_accumulation_steps,
         warmup_epochs=args.warmup_epochs,
         max_grad_norm=args.max_grad_norm,
+        model_name=args.model_name,
+        model_feature_size=args.model_feature_size,
+        unetr_hidden_size=args.unetr_hidden_size,
+        unetr_mlp_dim=args.unetr_mlp_dim,
+        unetr_num_heads=args.unetr_num_heads,
+        basicunet_features=tuple(args.basicunet_features),
         dropout_path_rate=args.dropout_path_rate,
         wandb=args.wandb,
         wandb_project=args.wandb_project,
         wandb_entity=args.wandb_entity,
         wandb_run_name=args.wandb_run_name,
         debug_data=args.debug_data,
+        fold=args.fold,
+        splits_json=args.splits_json,
     )
 
 

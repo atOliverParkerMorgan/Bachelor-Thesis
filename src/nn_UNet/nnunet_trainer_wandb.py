@@ -11,6 +11,7 @@ Configuration via environment variables (all optional):
   WANDB_ENTITY        W&B entity / team name      (default: None)
   WANDB_RUN_NAME      Display name for this run   (default: auto-generated)
   WANDB_API_KEY       API key if not already logged in
+    NNUNET_WEIGHT_DECAY Optimizer weight decay      (default: nnU-Net default)
 
 Also includes nnUNetTrainerLungPretrainedWandb which combines transfer-learning
 from a pretrained Lung CT checkpoint with W&B logging.  Checkpoint path is read
@@ -154,6 +155,9 @@ class nnUNetTrainerWandb(nnUNetTrainer):
         env_lr = os.environ.get("NNUNET_INITIAL_LR")
         if env_lr is not None:
             self.initial_lr = float(env_lr)
+        env_wd = os.environ.get("NNUNET_WEIGHT_DECAY")
+        if env_wd is not None:
+            self.weight_decay = float(env_wd)
         super().initialize()
 
     def configure_optimizers(self):
@@ -358,18 +362,18 @@ class nnUNetTrainerRareClassBoostWandb(nnUNetTrainerWandb):
          boost case to be centred on a rare-class voxel.
 
       4. Loss amplification for the rare class:
-           a. Cross-entropy class weight (30×) — large gradient signal on
+              a. Cross-entropy class weight (configurable, default 8×) — large gradient signal on
               each mis-classified rare-class voxel.
-           b. Auxiliary binary Dice loss (weight 5×) — directly optimises
+              b. Auxiliary binary Dice loss (weight configurable, default 1×) — directly optimises
               the Dice score for the rare class on top of the standard
               DC+CE loss.
 
     Configuration (override as class attributes in a subclass if needed)
     -----------------------------------------------------------------------
     RARE_LABEL_IDX         int   label index to boost (6 = Poškození hmyzem)
-      CASE_OVERSAMPLE_FACTOR int   extra copies of rare cases per epoch (8)
-      CE_RARE_CLASS_WEIGHT   float CE loss weight multiplier for rare class (30.0)
-      RARE_DICE_AUX_WEIGHT   float weight of auxiliary binary Dice term (5.0)
+        CASE_OVERSAMPLE_FACTOR int   extra copies of rare cases per epoch (8)
+        CE_RARE_CLASS_WEIGHT   float CE loss weight multiplier for rare class (8.0)
+        RARE_DICE_AUX_WEIGHT   float weight of auxiliary binary Dice term (1.0)
 
     Usage
     -----
@@ -498,11 +502,11 @@ class nnUNetTrainerRareClassBoostWandb(nnUNetTrainerWandb):
         """
         Build standard DC+CE loss, then apply two rare-class amplifications:
 
-          1. Replace the CE module with a class-weighted version (30×) so
+             1. Replace the CE module with a class-weighted version so
              mis-classifying a rare-class voxel costs proportionally more.
 
           2. Wrap in _CompoundLoss, adding an auxiliary _RareClassBinaryDice
-             term (weight 5×) that directly optimises the per-class Dice score
+                 term that directly optimises the per-class Dice score
                for Poškození hmyzem on top of the standard DC+CE signal.
         """
         loss = super()._build_loss()

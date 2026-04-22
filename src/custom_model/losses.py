@@ -44,15 +44,45 @@ def get_loss(
     model is most uncertain early in training.  Per-class weights still handle
     the frequency imbalance; focal gamma handles the confidence imbalance.
     """
-    focal_weights = torch.ones(num_classes)
+    include_background = False
+
+    # MONAI expects weight length to match the effective class count used by
+    # Dice/Focal. With include_background=False this is num_classes - 1.
+    if include_background:
+        weight_len = num_classes
+    else:
+        weight_len = max(1, num_classes - 1)
+
+    focal_weights = torch.ones(weight_len, dtype=torch.float32)
+
     for cls, w in _COVERAGE_WEIGHTS.items():
-        if cls < num_classes and cls != rare_label_idx:
-            focal_weights[cls] = w
-    focal_weights[rare_label_idx] = rare_class_weight
+        if cls >= num_classes:
+            continue
+        if include_background:
+            idx = cls
+        else:
+            if cls == 0:
+                continue
+            idx = cls - 1
+        if cls != rare_label_idx:
+            focal_weights[idx] = w
+
+    if 0 <= rare_label_idx < num_classes:
+        if include_background:
+            rare_idx = rare_label_idx
+        else:
+            rare_idx = rare_label_idx - 1
+        if 0 <= rare_idx < weight_len:
+            focal_weights[rare_idx] = rare_class_weight
 
     # Normalize so the frequency-weighted mean equals 1.0.
-    if len(_CLASS_FREQS) >= num_classes:
-        freqs = torch.tensor(_CLASS_FREQS[:num_classes], dtype=torch.float32)
+    if include_background:
+        freq_values = _CLASS_FREQS[:num_classes]
+    else:
+        freq_values = _CLASS_FREQS[1:num_classes]
+
+    if len(freq_values) == weight_len:
+        freqs = torch.tensor(freq_values, dtype=torch.float32)
         fw_mean = float((focal_weights * freqs).sum())
         if fw_mean > 0:
             focal_weights = focal_weights / fw_mean
@@ -60,7 +90,7 @@ def get_loss(
     return DiceFocalLoss(
         to_onehot_y=True,
         softmax=True,
-        include_background=False,
+        include_background=include_background,
         gamma=focal_gamma,
         weight=focal_weights,
         lambda_dice=0.5,
