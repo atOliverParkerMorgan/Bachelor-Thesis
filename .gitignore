@@ -39,17 +39,29 @@ temp_*/
 .temp_extract/
 .env
 
-# Medical imaging / large artifacts
+# Medical imaging / large data files
 *.nii
 *.nii.gz
 *.png
+*.pth
 Task006_Lung.zip
 
-# Project data directories (keep local, do not track)
-datasets/
+# Generated files
+splits_final.json
+stats.csv
+debug.json
+.gitignoreecho
+
+# Output and data directories
+output/
+src/data/
 src/ground_truth/
 src/png/
 src/output/
 src/cvat_exports/
+src/custom_model/results/
 src/nn_UNet/predictions/
 src/nn_UNet/nnunet_data/
+
+# Jupyter
+.ipynb_checkpoints/
