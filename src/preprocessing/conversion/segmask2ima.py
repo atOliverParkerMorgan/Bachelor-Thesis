@@ -177,7 +177,7 @@ def generate_dataset_json(output_dir: str | Path):
         json.dump(dataset_info, f, indent=4)
 
 def find_ima_directory(extract_dir):
-    for root, dirs, files in os.walk(extract_dir):
+    for root, _, files in os.walk(extract_dir):
         if any(f.lower().endswith('.ima') or f.lower().endswith('.dcm') for f in files):
             return root
     return None
@@ -189,6 +189,8 @@ def process_tree(tree_name):
     zip_path = f"src/ground_truth/{tree_upper}.zip"
     extract_dir = f"src/ground_truth/{tree_upper}"
     cvat_masks_dir = f"src/cvat_exports/cvat/{tree_lower}/images"
+    if not os.path.exists(cvat_masks_dir):
+        cvat_masks_dir = f"src/cvat_exports/cvat/{tree_lower}/SegmentationClass"
     cvat_annotations_xml = f"src/cvat_exports/cvat/{tree_lower}/annotations_fixed.xml"
     nnunet_raw_dir = "src/nn_UNet/nnunet_data/nnUNet_raw/Dataset001_BPWoodDefects/" 
     case_identifier = tree_lower 
