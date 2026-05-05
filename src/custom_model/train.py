@@ -12,7 +12,9 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
+import math
 import numpy as np
+import SimpleITK as sitk
 import torch
 from monai.data import CacheDataset, DataLoader, Dataset, decollate_batch, list_data_collate
 from monai.inferers import sliding_window_inference
@@ -66,6 +68,16 @@ class TrainConfig:
     wandb_entity: str | None = None
     wandb_run_name: str | None = None
     debug_data: bool = False
+    test_mode: bool = False
+    test_tree: str = "dub_2"
+    normalization: str = "zscore"
+    norm_clip_min: float = -1000.0
+    norm_clip_max: float = 500.0
+    normalization_mean: float | None = None
+    normalization_std: float | None = None
+    resume_checkpoint: str | None = None
+    pretrained_weights: str | None = None
+    loss_type: str = "combined"
 
 
 def _seed_everything(seed: int) -> None:
@@ -203,6 +215,63 @@ def _debug_dataset_split(train_cases: list, val_cases: list, case_classes: dict)
     print("[debug] val class presence:", _split_class_presence(val_cases, case_classes))
 
 
+def _compute_train_intensity_stats(
+    train_cases: list,
+    clip_min: float,
+    clip_max: float,
+) -> tuple[float, float]:
+    """Compute global mean/std from training images only.
+
+    The statistics are computed on intensities clipped to [clip_min, clip_max]
+    and then reused for both training and validation transforms.
+    """
+    if not train_cases:
+        raise ValueError("Cannot compute normalization stats from an empty training split.")
+
+    total_count = 0
+    total_sum = 0.0
+    total_sq_sum = 0.0
+
+    for case in train_cases:
+        arr = sitk.GetArrayFromImage(sitk.ReadImage(case["image"])).astype(np.float64)
+        arr = np.clip(arr, clip_min, clip_max)
+        total_count += arr.size
+        total_sum += float(arr.sum())
+        total_sq_sum += float(np.square(arr).sum())
+
+    if total_count == 0:
+        raise ValueError("Failed to compute normalization stats: zero voxels in training data.")
+
+    mean = total_sum / total_count
+    variance = max((total_sq_sum / total_count) - (mean * mean), 0.0)
+    std = float(np.sqrt(variance))
+    if std <= 1e-8:
+        raise ValueError("Computed near-zero std for training data; cannot apply z-score normalization.")
+
+    return float(mean), float(std)
+
+
+def _effective_num_workers(requested_workers: int) -> int:
+    """Clamp workers to what the runtime environment can actually schedule."""
+    requested = max(0, int(requested_workers))
+    if requested == 0:
+        return 0
+
+    available = None
+    try:
+        if hasattr(os, "sched_getaffinity"):
+            available = len(os.sched_getaffinity(0))
+    except Exception:
+        available = None
+
+    if available is None:
+        cpu_count = os.cpu_count()
+        available = int(cpu_count) if cpu_count is not None else 1
+
+    available = max(1, available)
+    return min(requested, available)
+
+
 def _init_wandb(config: TrainConfig):
     try:
         wandb = import_module("wandb")
@@ -322,7 +391,6 @@ def train(config: TrainConfig) -> Path:
 
     wandb = _init_wandb(config) if config.wandb else None
 
-    # Build dataset (oversampling recorded in dataset.case_classes / base_samples)
     dataset = WoodDefectDataset(
         config.image_dir,
         config.label_dir,
@@ -330,7 +398,6 @@ def train(config: TrainConfig) -> Path:
         oversample_factor=config.oversample_factor,
     )
 
-    # Load fold or use stratified split
     if config.fold is not None:
         if config.splits_json is None:
             raise ValueError("--splits-json required when using --fold")
@@ -339,16 +406,47 @@ def train(config: TrainConfig) -> Path:
         )
         print(f"Loaded fold {config.fold} from {config.splits_json}")
     else:
-        # Split on UNIQUE base cases only — no duplicates cross the train/val boundary.
-        # Stratified to guarantee every class present in ≥2 volumes appears in val.
         train_base, val_cases = _stratified_split(
             dataset.base_samples, dataset.case_classes, config.val_fraction, config.seed
+        )
+
+    num_train_cases = len(train_base)
+    num_val_cases = len(val_cases)
+    if config.test_mode:
+        print(
+            f"Test mode (tree={config.test_tree}): "
+            f"{num_train_cases} train cases | {num_val_cases} test cases"
         )
 
     if config.debug_data:
         _debug_dataset_split(train_base, val_cases, dataset.case_classes)
 
-    # Apply rare-class oversampling to the TRAINING fold only.
+    if config.normalization == "zscore":
+        norm_mean, norm_std = _compute_train_intensity_stats(
+            train_cases=train_base,
+            clip_min=config.norm_clip_min,
+            clip_max=config.norm_clip_max,
+        )
+        config.normalization_mean = norm_mean
+        config.normalization_std = norm_std
+        print(
+            "Train-set normalization stats "
+            f"(clip=[{config.norm_clip_min}, {config.norm_clip_max}]): "
+            f"mean={norm_mean:.4f}, std={norm_std:.4f}"
+        )
+    elif config.normalization == "range":
+        config.normalization_mean = None
+        config.normalization_std = None
+        print(
+            "Using fixed-range normalization "
+            f"with clip=[{config.norm_clip_min}, {config.norm_clip_max}] and output [0, 1]"
+        )
+    else:
+        raise ValueError(f"Unsupported normalization mode: {config.normalization}")
+
+    (output_dir / "config.json").write_text(json.dumps(asdict(config), indent=2), encoding="utf-8")
+
+    # Oversample only the training fold — val stays clean
     rare_train = [
         c for c in train_base
         if config.rare_label_idx in dataset.case_classes.get(c["label"], frozenset())
@@ -366,25 +464,43 @@ def train(config: TrainConfig) -> Path:
         config.batch_size,
         num_classes=config.num_classes,
         rare_label_idx=config.rare_label_idx,
+        normalization=config.normalization,
+        clip_min=config.norm_clip_min,
+        clip_max=config.norm_clip_max,
+        zscore_mean=config.normalization_mean,
+        zscore_std=config.normalization_std,
     )
-    val_transform = get_val_transforms()
+    val_transform = get_val_transforms(
+        normalization=config.normalization,
+        clip_min=config.norm_clip_min,
+        clip_max=config.norm_clip_max,
+        zscore_mean=config.normalization_mean,
+        zscore_std=config.normalization_std,
+    )
+
+    effective_workers = _effective_num_workers(config.num_workers)
+    if effective_workers != config.num_workers:
+        print(
+            f"num_workers adjusted for this node: requested={config.num_workers}, "
+            f"effective={effective_workers}"
+        )
 
     if config.cache_rate > 0:
         print(
             f"Using CacheDataset with cache_rate={config.cache_rate} and "
-            f"num_workers={config.num_workers}"
+            f"num_workers={effective_workers}"
         )
         train_ds = CacheDataset(
             data=train_cases,
             transform=train_transform,
             cache_rate=config.cache_rate,
-            num_workers=config.num_workers,
+            num_workers=effective_workers,
         )
         val_ds = CacheDataset(
             data=val_cases,
             transform=val_transform,
             cache_rate=config.cache_rate,
-            num_workers=config.num_workers,
+            num_workers=effective_workers,
         )
     else:
         print("Using Dataset without cache (cache_rate=0.0) to reduce RAM usage.")
@@ -395,18 +511,18 @@ def train(config: TrainConfig) -> Path:
         train_ds,
         batch_size=1,
         shuffle=True,
-        num_workers=config.num_workers,
+        num_workers=effective_workers,
         collate_fn=list_data_collate,
         pin_memory=False,
-        persistent_workers=config.num_workers > 0,
+        persistent_workers=effective_workers > 0,
     )
     val_loader = DataLoader(
         val_ds,
         batch_size=1,
         shuffle=False,
-        num_workers=config.num_workers,
+        num_workers=effective_workers,
         pin_memory=False,
-        persistent_workers=config.num_workers > 0,
+        persistent_workers=effective_workers > 0,
     )
 
     if config.debug_data:
@@ -424,6 +540,7 @@ def train(config: TrainConfig) -> Path:
         mlp_dim=config.unetr_mlp_dim,
         num_heads=config.unetr_num_heads,
         basicunet_features=config.basicunet_features,
+        pretrained_weights=config.pretrained_weights,
     ).to(device)
     print(
         "Model: "
@@ -438,32 +555,30 @@ def train(config: TrainConfig) -> Path:
         num_classes=config.num_classes,
         rare_label_idx=config.rare_label_idx,
         rare_class_weight=config.rare_class_weight,
+        loss_type=config.loss_type,
     ).to(device)
     val_loss_fn = get_loss(
         num_classes=config.num_classes,
         rare_label_idx=config.rare_label_idx,
         rare_class_weight=config.rare_class_weight,
+        loss_type=config.loss_type,
     ).to(device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=config.learning_rate, weight_decay=config.weight_decay)
 
-    # Linear warmup for warmup_epochs, then cosine decay over the remainder.
-    # T_max tracks actual remaining epochs so the LR reaches its minimum by
-    # the end of training (or early stopping) rather than at epoch 1000.
+    # LambdaLR instead of SequentialLR — SequentialLR has a bug where
+    # CosineAnnealingLR inherits the scaled-down LR from LinearLR.__init__,
+    # making eta_max = 0.01 * lr rather than lr after warmup.
     warmup = max(0, config.warmup_epochs)
     cosine_epochs = max(1, config.epochs - warmup)
-    if warmup > 0:
-        scheduler = torch.optim.lr_scheduler.SequentialLR(
-            optimizer,
-            schedulers=[
-                torch.optim.lr_scheduler.LinearLR(
-                    optimizer, start_factor=0.01, end_factor=1.0, total_iters=warmup
-                ),
-                torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=cosine_epochs),
-            ],
-            milestones=[warmup],
-        )
-    else:
-        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=cosine_epochs)
+
+    def _lr_lambda(epoch: int) -> float:
+        if epoch < warmup:
+            # linear ramp from 1% to 100% of base lr
+            return 0.01 + 0.99 * epoch / warmup
+        progress = (epoch - warmup) / cosine_epochs
+        return 0.5 * (1.0 + math.cos(math.pi * min(progress, 1.0)))
+
+    scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=_lr_lambda)
     metric = DiceMetric(include_background=False, reduction="mean_batch")
     post_pred = AsDiscrete(argmax=True, to_onehot=config.num_classes)
     post_label = AsDiscrete(to_onehot=config.num_classes)
@@ -478,12 +593,35 @@ def train(config: TrainConfig) -> Path:
     last_path = output_dir / "last_model.pth"
     history: list[dict[str, Any]] = []
     train_metric = DiceMetric(include_background=False, reduction="mean_batch")
+    start_epoch = 0
+
+    if config.resume_checkpoint is not None:
+        ckpt_path = Path(config.resume_checkpoint)
+        print(f"Resuming from checkpoint: {ckpt_path}")
+        ckpt = torch.load(ckpt_path, map_location=device, weights_only=False)
+        model.load_state_dict(ckpt["model_state_dict"])
+        optimizer.load_state_dict(ckpt["optimizer_state_dict"])
+        scheduler.load_state_dict(ckpt["scheduler_state_dict"])
+        scaler.load_state_dict(ckpt["scaler_state_dict"])
+        start_epoch = int(ckpt["epoch"])
+        history = ckpt.get("history", [])
+        if history:
+            best_row = max(history, key=lambda r: float(r["val_mean_dice"]))
+            best_metric = float(best_row["val_mean_dice"])
+            best_metric_epoch = int(best_row["epoch"])
+            # count consecutive epochs at the tail with no improvement
+            no_improve_epochs = 0
+            for row in reversed(history):
+                if float(row["val_mean_dice"]) > (best_metric - config.early_stopping_min_delta):
+                    break
+                no_improve_epochs += 1
+        print(f"Resumed at epoch {start_epoch}, best_dice={best_metric:.4f} at epoch {best_metric_epoch}")
 
     status = "finished"
     error_message = None
 
     try:
-        for epoch in range(config.epochs):
+        for epoch in range(start_epoch, config.epochs):
             model.train()
             train_metric.reset()
             epoch_loss = 0.0
@@ -506,7 +644,7 @@ def train(config: TrainConfig) -> Path:
                     )
 
                 scaler.scale(loss).backward()
-                epoch_loss += loss.item() * accum_steps  # log unscaled value
+                epoch_loss += loss.item() * accum_steps
 
                 train_outputs = [post_pred(item) for item in decollate_batch(outputs.detach())]
                 train_labels = [post_label(item) for item in decollate_batch(labels.detach())]
@@ -655,6 +793,17 @@ def train(config: TrainConfig) -> Path:
             "stopped_epoch": stopped_epoch,
             "no_improve_epochs": no_improve_epochs,
             "error": error_message,
+            "test_mode": config.test_mode,
+            "test_tree": config.test_tree if config.test_mode else None,
+            "num_train_cases": num_train_cases,
+            "num_test_cases": num_val_cases,
+            "normalization": {
+                "mode": config.normalization,
+                "clip_min": config.norm_clip_min,
+                "clip_max": config.norm_clip_max,
+                "train_mean": config.normalization_mean,
+                "train_std": config.normalization_std,
+            },
             "artifacts": {
                 "config": "config.json",
                 "history_json": "metrics_history.json",
@@ -755,7 +904,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--model-name",
-        choices=["swinunetr", "swinunetr_v2", "unetr", "basicunetplusplus"],
+        choices=["swinunetr", "swinunetr_v2", "unetr", "basicunetplusplus", "mednext", "segmamba"],
         default="swinunetr",
         help="Model architecture to train (default: swinunetr).",
     )
@@ -808,6 +957,56 @@ def build_arg_parser() -> argparse.ArgumentParser:
         default="splits_final.json",
         help="Path to splits JSON file for fold-based training (default: splits_final.json).",
     )
+    parser.add_argument(
+        "--test-mode",
+        action="store_true",
+        help="Mark this run as a holdout test-mode run (metadata only; split is pre-built by pipeline).",
+    )
+    parser.add_argument(
+        "--test-tree",
+        default="dub_2",
+        help="Tree name held out as the test set (default: dub_2).",
+    )
+    parser.add_argument(
+        "--normalization",
+        choices=["range", "zscore"],
+        default="zscore",
+        help="Intensity normalization mode: fixed range scaling or train-set z-score (default: zscore).",
+    )
+    parser.add_argument(
+        "--norm-clip-min",
+        type=float,
+        default=-1000.0,
+        help="Lower intensity bound used before normalization (default: -1000).",
+    )
+    parser.add_argument(
+        "--norm-clip-max",
+        type=float,
+        default=500.0,
+        help="Upper intensity bound used before normalization (default: 500).",
+    )
+    parser.add_argument(
+        "--resume-checkpoint",
+        type=str,
+        default=None,
+        metavar="PATH",
+        help="Path to a last_model.pth checkpoint to resume training from.",
+    )
+    parser.add_argument(
+        "--pretrained-weights",
+        type=str,
+        default=None,
+        metavar="PATH",
+        help="Path to SSL pretrained SwinUNETR backbone weights (model_swinvit.pt). "
+             "Only applies to swinunetr and swinunetr_v2 models.",
+    )
+    parser.add_argument(
+        "--loss-type",
+        choices=["combined", "dice_focal"],
+        default="combined",
+        help="Loss function: 'combined' = CE+SoftDice+SkeletonRecall (default), "
+             "'dice_focal' = legacy DiceFocal.",
+    )
     return parser
 
 
@@ -852,6 +1051,14 @@ def parse_args(argv=None) -> TrainConfig:
         debug_data=args.debug_data,
         fold=args.fold,
         splits_json=args.splits_json,
+        test_mode=args.test_mode,
+        test_tree=args.test_tree,
+        normalization=args.normalization,
+        norm_clip_min=args.norm_clip_min,
+        norm_clip_max=args.norm_clip_max,
+        resume_checkpoint=args.resume_checkpoint,
+        pretrained_weights=args.pretrained_weights,
+        loss_type=args.loss_type,
     )
 
 
