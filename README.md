@@ -1,6 +1,6 @@
 # Wood Defect Detection in CT Scans
 
-Bachelor thesis project for automatic wood-defect segmentation in CT scans using nnU-Net v2 and MONAI-based custom models.
+Bachelor thesis project for automatic wood-defect segmentation in CT scans using nnU-Net v2, MONAI-based custom models, and classical preprocessing/postprocessing utilities.
 
 **Classes:** Background (0), Healthy Wood (1), Knot (2), Rot (3), Bark (4), Crack (5), Insect Damage (6)
 
@@ -10,65 +10,82 @@ Bachelor thesis project for automatic wood-defect segmentation in CT scans using
 poetry install
 ```
 
-Place raw ground-truth data in `src/ground_truth/` as ZIP files or folders with DICOM/IMA files. The tree-specific wrappers expect to be run from the project root.
+Place raw data in `src/ground_truth/` as ZIP files or folders containing DICOM / IMA files.
 
-## Project Structure
+## Entry Points
 
-```
+- `./run_preproccessing` - classical preprocessing pipeline: extract, convert, segment, export Datumaro, and optionally upload to CVAT
+- `./run` - nnU-Net and custom-model pipeline entrypoint
+- `./run_swinunetr` - shortcut for `./run custom-train --model-name swinunetr`
+- `./run_mednext` - shortcut for `./run custom-train --model-name mednext`
+
+## Project Layout
+
+```text
 src/
-  preprocessing/          # DICOM → PNG conversion, classical segmentation, Datumaro helpers
-  nn_UNet/                # nnU-Net v2 pipeline, trainer variants, cluster submission helpers
-  custom_model/           # MONAI training, inference, losses, transforms, dataset code
-  postprocessing/         # Rule-based cleanup and analysis utilities
-    unanottated_data/       # Local raw/derived datasets (not tracked)
-run                       # Classical preprocessing entrypoint
-run_nnunet                # nnU-Net / custom-model entrypoint
-run_mednext.sh            # Convenience wrapper for custom-train --model-name mednext
-run_swinunetr.sh          # Convenience wrapper for custom-train --model-name swinunetr
+  preprocessing/   DICOM -> PNG conversion, classical segmentation, Datumaro helpers
+  nn_UNet/         nnU-Net v2 pipeline, trainer variants, cluster submission helpers
+  custom_model/    MONAI training, inference, losses, transforms, dataset code
+  postprocessing/  Rule-based cleanup and analysis utilities
+  unanottated_data/ Local raw and derived datasets (not tracked)
 ```
 
-## Workflows
+## Classical Preprocessing
 
-### Classical preprocessing
-
-Extract DICOM slices, convert them to PNG, run classical segmentation, and build the nnU-Net dataset:
+Run extraction, conversion, segmentation, and Datumaro export:
 
 ```bash
-./run
+./run_preproccessing
 ```
 
 Useful options:
 
 ```bash
-./run --masks kura,pozadi
-./run --tree dub5 --skip-extract --skip-convert --masks trhlina,hniloba
-./run --tree dub5 --skip-extract --skip-convert --upload
+./run_preproccessing --masks kura,pozadi
+./run_preproccessing --tree dub5 --skip-extract --skip-convert --masks trhlina,hniloba
+./run_preproccessing --tree dub5 --skip-extract --skip-convert --upload
 ```
 
-### nnU-Net pipeline
+The script name keeps the original `preproccessing` spelling.
 
-Prepare dataset:
+## nnU-Net and Custom Models
+
+The `./run` entrypoint forwards to `src.nn_UNet.pipeline` and supports:
+
+- `prepare`
+- `plan`
+- `train`
+- `predict`
+- `predict-tree`
+- `all`
+- `custom-train`
+- `custom-predict`
+- `custom-evaluate`
+
+### nnU-Net workflow
+
+Prepare the dataset:
 
 ```bash
-./run_nnunet prepare --overwrite
+./run prepare --overwrite
 ```
 
 Plan and preprocess:
 
 ```bash
-./run_nnunet plan --verify-dataset-integrity
+./run plan --verify-dataset-integrity
 ```
 
 Train:
 
 ```bash
-./run_nnunet train --configuration 3d_fullres --fold 0
+./run train --configuration 3d_fullres --fold 0
 ```
 
 Predict on a tree and export Datumaro:
 
 ```bash
-./run_nnunet predict-tree \
+./run predict-tree \
     --tree DUB_4 \
     --ground-truth-root ./src/ground_truth \
     --segmentation-output-root ./predictions \
@@ -79,7 +96,7 @@ Predict on a tree and export Datumaro:
 Predict from a ZIP file:
 
 ```bash
-./run_nnunet predict \
+./run predict \
     --input ./src/ground_truth/DUB_4.zip \
     --output ./predictions \
     --configuration 3d_fullres --fold 0
@@ -87,21 +104,26 @@ Predict from a ZIP file:
 
 ### Custom models
 
-Supported model names in `custom-train`: `swinunetr` (default), `swinunetr_v2`, `unetr`, `basicunetplusplus`, `mednext`, `segmamba`.
+Supported model names in `custom-train`:
+
+- `swinunetr` (default)
+- `swinunetr_v2`
+- `unetr`
+- `basicunetplusplus`
+- `mednext`
+- `segmamba`
 
 For the common cases, use the wrappers:
 
 ```bash
-./run_swinunetr.sh --output-dir ./output/swinunetr --epochs 1000 --batch-size 2
-./run_mednext.sh --output-dir ./output/mednext --epochs 1000 --batch-size 2
+./run_swinunetr --output-dir ./output/swinunetr --epochs 1000 --batch-size 2
+./run_mednext --output-dir ./output/mednext --epochs 1000 --batch-size 2
 ```
-
-All `custom-train` flags are still available through `./run_nnunet custom-train ...` if you need a different architecture or a cluster submission.
 
 Train with an explicit dataset split:
 
 ```bash
-./run_nnunet custom-train \
+./run custom-train \
     --model-name mednext \
     --image-dir ./src/nn_UNet/nnunet_data/nnUNet_raw/Dataset002_BPWoodDefectsSplit/imagesTr \
     --label-dir ./src/nn_UNet/nnunet_data/nnUNet_raw/Dataset002_BPWoodDefectsSplit/labelsTr \
@@ -115,13 +137,13 @@ Train with an explicit dataset split:
 Resume from a checkpoint:
 
 ```bash
-./run_nnunet custom-train ... --resume-checkpoint ./output/mednext/last_model.pth
+./run custom-train ... --resume-checkpoint ./output/mednext/last_model.pth
 ```
 
 Predict with a trained custom model:
 
 ```bash
-./run_nnunet custom-predict \
+./run custom-predict \
     --model-dir ./output/mednext \
     --input ./src/ground_truth/DUB_4.zip \
     --output ./predictions/mednext
@@ -129,7 +151,7 @@ Predict with a trained custom model:
 
 Training outputs include `best_model.pth`, `last_model.pth`, `metrics_history.csv`, `training_curves.png`, and `run_summary.json`.
 
-### Postprocessing
+## Postprocessing
 
 ```bash
 poetry run python -m src.postprocessing.postprocess predictions/DUB_4.nii.gz predictions/DUB_4_pp.nii.gz
@@ -145,7 +167,7 @@ Add `--clusterfit` and the relevant Slurm flags to any command. Recommended GPU:
 ### Prepare on CPU
 
 ```bash
-./run_nnunet prepare --overwrite \
+./run prepare \
     --clusterfit --slurm-partition cpu \
     --slurm-cpus-per-task 16 --slurm-time 02:00:00
 ```
@@ -153,7 +175,7 @@ Add `--clusterfit` and the relevant Slurm flags to any command. Recommended GPU:
 ### Plan on CPU
 
 ```bash
-./run_nnunet plan \
+./run plan \
     --clusterfit --slurm-partition cpu \
     --slurm-cpus-per-task 16 --slurm-time 04:00:00 \
     --configurations 3d_fullres
@@ -162,7 +184,7 @@ Add `--clusterfit` and the relevant Slurm flags to any command. Recommended GPU:
 ### Train nnU-Net on GPU
 
 ```bash
-./run_nnunet train \
+./run train \
     --clusterfit --slurm-partition gpu \
     --slurm-cpus-per-task 8 --slurm-gpu a100_40 --slurm-time 72:00:00 \
     --configuration 3d_fullres --fold 0 \
@@ -172,7 +194,7 @@ Add `--clusterfit` and the relevant Slurm flags to any command. Recommended GPU:
 ### Train a custom model on GPU
 
 ```bash
-./run_nnunet custom-train \
+./run custom-train \
     --clusterfit --slurm-partition gpu \
     --slurm-cpus-per-task 8 --slurm-gpu a100_40 --slurm-time 24:00:00 \
     --epochs 1000 --batch-size 2 --patch-size 128 384 128 \
@@ -184,7 +206,7 @@ Add `--clusterfit` and the relevant Slurm flags to any command. Recommended GPU:
 ### Predict on GPU
 
 ```bash
-./run_nnunet predict \
+./run predict \
     --clusterfit --slurm-partition gpu --slurm-gpu a100_40 \
     --input ./src/ground_truth/DUB_4.zip \
     --output ./predictions \
