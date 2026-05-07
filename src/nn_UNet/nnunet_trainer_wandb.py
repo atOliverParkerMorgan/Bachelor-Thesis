@@ -1,22 +1,5 @@
 #!/usr/bin/env python3
-"""
-nnUNetTrainerWandb — nnU-Net v2 trainer with Weights & Biases logging.
-
-pipeline.py copies this file into the nnunetv2 trainer variants directory
-automatically when --wandb is passed, making the classes discoverable by
-nnUNetv2_train.
-
-Configuration via environment variables (all optional):
-  WANDB_PROJECT       W&B project name           (default: nnunet-training)
-  WANDB_ENTITY        W&B entity / team name      (default: None)
-  WANDB_RUN_NAME      Display name for this run   (default: auto-generated)
-  WANDB_API_KEY       API key if not already logged in
-    NNUNET_WEIGHT_DECAY Optimizer weight decay      (default: nnU-Net default)
-
-Also includes nnUNetTrainerLungPretrainedWandb which combines transfer-learning
-from a pretrained Lung CT checkpoint with W&B logging.  Checkpoint path is read
-from NNUNET_PRETRAINED_WEIGHTS.
-"""
+"""nnUNetTrainerWandb — nnU-Net trainer variants with optional W&B logging."""
 from __future__ import annotations
 
 import os
@@ -345,44 +328,7 @@ class nnUNetTrainerLungPretrainedWandb(nnUNetTrainerWandb):
 
 
 class nnUNetTrainerRareClassBoostWandb(nnUNetTrainerWandb):
-    """
-    Trainer that maximises learning for rare / under-represented classes.
-
-    Combines four complementary techniques:
-
-      1. Higher foreground-oversample rate (0.67 vs default 0.33) so the
-         DataLoader more aggressively picks foreground-containing patches.
-
-      2. Case-level oversampling: training cases that contain the rare class
-         are duplicated so they appear proportionally more often per epoch.
-
-      3. Patch-level rare-class focus: the duplicated cases are served through
-         a _RareClassFocusedDataset proxy that narrows class_locations to only
-         the rare label, forcing every foreground-oversampled patch from a
-         boost case to be centred on a rare-class voxel.
-
-      4. Loss amplification for the rare class:
-              a. Cross-entropy class weight (configurable, default 8×) — large gradient signal on
-              each mis-classified rare-class voxel.
-              b. Auxiliary binary Dice loss (weight configurable, default 1×) — directly optimises
-              the Dice score for the rare class on top of the standard
-              DC+CE loss.
-
-    Configuration (override as class attributes in a subclass if needed)
-    -----------------------------------------------------------------------
-    RARE_LABEL_IDX         int   label index to boost (6 = Poškození hmyzem)
-        CASE_OVERSAMPLE_FACTOR int   extra copies of rare cases per epoch (8)
-        CE_RARE_CLASS_WEIGHT   float CE loss weight multiplier for rare class (8.0)
-        RARE_DICE_AUX_WEIGHT   float weight of auxiliary binary Dice term (1.0)
-
-    Usage
-    -----
-      nnUNetv2_train 1 3d_fullres 0 -p nnUNetResEncUNetLPlans \\
-          --trainer nnUNetTrainerRareClassBoostWandb
-
-    (pipeline.py will copy this file to the nnunetv2 trainers directory
-     automatically when --wandb is passed, or you can copy it manually.)
-    """
+    """Trainer variant that increases sampling and loss emphasis for rare classes."""
 
     # ── tuneable knobs ─────────────────────────────────────────────────────────
     RARE_LABEL_IDX:         int   = 6     # Poškození hmyzem (dataset.json index)

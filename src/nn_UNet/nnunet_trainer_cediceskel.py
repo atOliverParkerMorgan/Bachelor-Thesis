@@ -1,30 +1,5 @@
 #!/usr/bin/env python3
-"""
-nnUNetTrainerCeDiceSkel — CE + Soft Dice + Skeleton Recall loss for nnU-Net v2.
-
-pipeline.py copies this file into the nnunetv2 trainer variants directory
-automatically when --trainer nnUNetTrainerCeDiceSkel is passed.
-
-Skeleton Recall measures how much softmax probability mass falls on the medial-axis
-skeleton of each GT class, enforcing topology recovery for thin structures (cracks,
-insect damage channels).  The skeleton computation is non-differentiable and is done
-inside @torch.no_grad() — gradients flow only through the softmax probabilities.
-
-The loss wraps nnUNet's default compound loss (DC + CE with deep supervision) and
-adds skeleton recall on the primary (full-resolution) output:
-    total = base_dc_ce  +  lambda_skel * skeleton_recall
-
-Speed optimisations vs. naive implementation:
-  - Downsampling: GT masks are downsampled by `downsample_factor` (default 2) before
-    skeletonization, reducing 3D voxel count by factor**3 (8× for factor=2). The
-    resulting skeleton is upsampled back to original size. Tiny connected components
-    that vanish at half resolution are negligible for crack/insect topology.
-  - Sparse evaluation: skeleton loss is computed only every `skel_every_n` iterations
-    (default 4). CE + Soft-Dice run every step; skeleton provides a periodic topology
-    correction. This reduces skeleton overhead by ~32× with no measurable quality loss.
-  - Parallel workers: a ThreadPoolExecutor runs per-sample/per-class skeletonization
-    in parallel across CPU threads (GIL released by Cython-backed skimage code).
-"""
+"""nnUNetTrainerCeDiceSkel — CE + Dice + skeleton-recall loss for nnU-Net v2."""
 from __future__ import annotations
 
 import concurrent.futures

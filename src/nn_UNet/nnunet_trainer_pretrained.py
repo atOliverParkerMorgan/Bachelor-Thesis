@@ -1,16 +1,5 @@
 #!/usr/bin/env python3
-"""
-nnUNetTrainerLungPretrained — partial-weight transfer from a pretrained Lung CT checkpoint.
-
-pipeline.py copies this file into the nnunetv2 trainer variants directory automatically
-when --pretrained-weights is passed, making the class discoverable by nnUNetv2_train.
-
-Checkpoint path is read from the environment variable NNUNET_PRETRAINED_WEIGHTS.
-Uses strict=False so the final segmentation head (different class count) is always
-reinitialised from scratch.  Supports both:
-  - nnUNetv2 .pth checkpoints  (key: 'network_weights')
-  - nnUNetv1 .model checkpoints (key: 'state_dict')
-"""
+"""nnUNetTrainerLungPretrained — transfer partial weights from a Lung CT checkpoint."""
 from __future__ import annotations
 
 import os
