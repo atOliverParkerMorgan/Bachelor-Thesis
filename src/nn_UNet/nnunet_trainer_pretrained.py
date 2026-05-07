@@ -11,11 +11,7 @@ from nnunetv2.training.nnUNetTrainer.nnUNetTrainer import nnUNetTrainer
 
 
 class nnUNetTrainerLungPretrained(nnUNetTrainer):
-    """Transfer-learning trainer: initialises encoder from a pretrained Lung CT model.
-
-    The final segmentation head is always trained from scratch because the number of
-    output classes differs between Lung (2) and the wood-defect dataset.
-    """
+    """Initialise the encoder from a pretrained Lung CT checkpoint."""
 
     def initialize(self) -> None:
         super().initialize()

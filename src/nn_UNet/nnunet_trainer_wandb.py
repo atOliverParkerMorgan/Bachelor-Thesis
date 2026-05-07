@@ -18,23 +18,7 @@ from nnunetv2.training.loss.robust_ce_loss import RobustCrossEntropyLoss
 
 
 class _RareClassFocusedDataset:
-    """
-    Thin proxy around any nnUNetBaseDataset subclass
-    (nnUNetDatasetBlosc2, nnUNetDatasetNumpy, …).
-
-    nnUNetDataLoader reads case identifiers from data.identifiers (a plain list,
-    set at DataLoader.__init__ line 46: self.indices = data.identifiers) and
-    loads cases via data.load_case(identifier).  This wrapper:
-
-      - Exposes an identifiers list that includes '__rare_boost_N' suffixed
-        duplicates of rare-class cases (already appended to the underlying
-        dataset's identifiers by _duplicate_rare_class_cases before wrapping).
-      - Overrides load_case so that for any boost key the suffix is stripped
-        to load the real data, and class_locations in the returned properties
-        is narrowed to only the rare label — forcing the DataLoader's foreground
-        oversampling (get_bbox) to centre every boost-case patch on a rare-class
-        voxel instead of a random foreground class.
-    """
+    """Proxy dataset that narrows boost patches to the rare label."""
 
     def __init__(self, dataset, rare_label_idx: int) -> None:
         self._dataset = dataset
@@ -68,18 +52,7 @@ class _RareClassFocusedDataset:
 
 
 class _RareClassBinaryDice(nn.Module):
-    """
-    Auxiliary binary Dice loss focused on a single rare class.
-
-    Computes Dice only between the rare-class softmax probability channel and
-    the binary rare-class mask.  Added on top of the standard DC+CE loss to
-    give an extra gradient signal specifically for the rare class.
-
-    Handles both plain tensors (validation / no deep supervision) and
-    deep-supervision lists (training): in the list case only the
-    full-resolution head (index 0) is used.
-    """
-
+    """Dice loss for a single rare class, treating it as a binary problem."""
     def __init__(self, rare_label_idx: int, smooth: float = 1.0) -> None:
         super().__init__()
         self.rare_label_idx = rare_label_idx
@@ -266,12 +239,7 @@ class nnUNetTrainerWandb(nnUNetTrainer):
 
 
 class nnUNetTrainerLungPretrainedWandb(nnUNetTrainerWandb):
-    """Transfer-learning trainer (Lung CT pretrained weights) with W&B logging.
-
-    Combines nnUNetTrainerLungPretrained and nnUNetTrainerWandb in one class.
-    Pretrained checkpoint path is read from NNUNET_PRETRAINED_WEIGHTS.
-    Uses strict=False so the final segmentation head is always reinitialised.
-    """
+    """W&B trainer that also loads partial Lung CT pretrained weights."""
 
     def initialize(self) -> None:
         super().initialize()
@@ -380,16 +348,7 @@ class nnUNetTrainerRareClassBoostWandb(nnUNetTrainerWandb):
     # ── case oversampling ──────────────────────────────────────────────────────
 
     def _duplicate_rare_class_cases(self) -> None:
-        """
-        Scan the preprocessed property files to find training cases that
-        contain RARE_LABEL_IDX, then add CASE_OVERSAMPLE_FACTOR duplicate
-        entries for each such case in self.dataset_tr.
 
-        nnUNet's DataLoader samples uniformly from dataset_tr.identifiers, so
-        adding duplicates increases the chance those cases appear in a batch.
-        Each duplicate value points to the SAME preprocessed files, so no
-        disk space is wasted.
-        """
         if not hasattr(self, "dataset_tr") or self.dataset_tr is None:
             self.print_to_log_file(
                 "RareClassBoost: dataset_tr not initialised yet — skipping case oversample."
@@ -500,16 +459,7 @@ class nnUNetTrainerRareClassBoostWandb(nnUNetTrainerWandb):
 
 
 class nnUNetTrainerRareClassBoostLungPretrainedWandb(nnUNetTrainerRareClassBoostWandb):
-    """
-    Combines all three capabilities in one trainer:
-      - Rare-class boost (case oversampling, patch forcing, weighted loss)
-      - Transfer learning from a pretrained Lung CT checkpoint
-      - Weights & Biases logging
-
-    Pretrained checkpoint path is read from NNUNET_PRETRAINED_WEIGHTS.
-    Selected automatically by pipeline.py when both --pretrained-weights
-    and --wandb are passed together.
-    """
+    """Rare-class boost trainer with Lung CT pretraining and W&B logging."""
 
     def initialize(self) -> None:
         super().initialize()

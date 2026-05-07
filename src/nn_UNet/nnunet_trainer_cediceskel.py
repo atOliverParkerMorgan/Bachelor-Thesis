@@ -16,22 +16,7 @@ from nnunetv2.training.nnUNetTrainer.nnUNetTrainer import nnUNetTrainer
 # ---------------------------------------------------------------------------
 
 class _SkeletonRecallLoss(nn.Module):
-    """1 - mean skeleton recall over foreground classes.
-
-    For each GT binary mask the medial-axis skeleton is computed with skimage.
-    The loss measures how much softmax probability the model places on those
-    skeleton voxels — i.e. whether it correctly recovers the topology of thin
-    elongated structures (cracks, insect damage channels).
-
-    Args:
-        include_background: include class 0 in recall computation.
-        epsilon:            numerical stability for recall denominator.
-        downsample_factor:  downsample GT masks by this factor in each spatial
-                            dimension before skeletonizing (default 2 = 8× fewer
-                            voxels in 3-D).  Set to 1 to disable.
-        max_workers:        parallel threads for per-sample/per-class skeleton
-                            computation (default 4).
-    """
+    """1 - mean skeleton recall over foreground classes."""
 
     def __init__(
         self,
@@ -122,20 +107,7 @@ class _SkeletonRecallLoss(nn.Module):
 # ---------------------------------------------------------------------------
 
 class _SkelAugmentedLoss(nn.Module):
-    """Wraps a nnUNet compound loss (with or without deep supervision) and adds
-    skeleton recall computed only on the primary full-resolution output.
-
-    Deep supervision is preserved: the base loss handles all scales; skeleton
-    recall is an additional topology signal on the highest-resolution prediction.
-
-    Args:
-        base_loss:     the base nnUNet compound loss (DC + CE, deep supervision).
-        lambda_skel:   weight of the skeleton recall term (default 0.5).
-        skel_every_n:  compute skeleton recall only every N iterations (default 4).
-                       CE + Dice run every step; skeleton provides periodic topology
-                       signal. Reduces skeleton overhead by ~32× combined with
-                       downsampling.
-    """
+    """Wrapper that adds skeleton recall loss to any base loss."""
 
     def __init__(
         self,
@@ -175,11 +147,7 @@ class _SkelAugmentedLoss(nn.Module):
 # ---------------------------------------------------------------------------
 
 class nnUNetTrainerCeDiceSkel(nnUNetTrainer):
-    """nnU-Net trainer with CE + Soft Dice + Skeleton Recall loss.
-
-    Works for any nnUNet configuration including 3d_fullres, 3d_lowres,
-    3d_cascade_fullres, and 2d.
-    """
+    """nnU-Net trainer with CE, Dice, and skeleton recall loss."""
 
     def _build_loss(self) -> nn.Module:
         base = super()._build_loss()
