@@ -43,6 +43,10 @@ temp_*/
 *.nii
 *.nii.gz
 *.png
+*.zip
+*.IMA
+*.npy
+*.npz
 *.pth
 Task006_Lung.zip
 
@@ -50,7 +54,13 @@ Task006_Lung.zip
 splits_final.json
 stats.csv
 debug.json
-.gitignoreecho
+
+# Local agent / editor state
+.claude/
+
+# Repo-specific scratch and raw data
+src/preprocessing/segmentation/test.ipynb
+src/unanottated_data/
 
 # Output and data directories
 output/

@@ -928,7 +928,6 @@ def build_parser() -> argparse.ArgumentParser:
     )
     add_clusterfit_arguments(predict)
 
-    # --- NEW: predict-tree command added here ---
     predict_tree = subparsers.add_parser("predict-tree", help="Run whole-tree inference and export to Datumaro")
     add_dataset_args(predict_tree)
     predict_tree.add_argument("--tree", required=True, help="Tree name (e.g., DUB_4)")
@@ -969,7 +968,6 @@ def build_parser() -> argparse.ArgumentParser:
     add_hidden_legacy_planner_args(predict_tree)
     predict_tree.add_argument("--plans-identifier", default=None)
     add_clusterfit_arguments(predict_tree)
-    # --------------------------------------------
 
     all_cmd = subparsers.add_parser("all", help="Prepare + plan + train")
     add_dataset_args(all_cmd)
@@ -1716,7 +1714,6 @@ def run_predict(args: argparse.Namespace, env: Dict[str, str]) -> None:
             log("Cleaned up temporary NIfTI inputs.")
 
 
-# --- NEW: Function to handle the full tree logic ---
 def run_predict_tree(args: argparse.Namespace, env: Dict[str, str]) -> None:
     from src.nn_UNet.tree_inference_helpers import (
         prepare_png_tree_from_ground_truth,
@@ -1740,7 +1737,6 @@ def run_predict_tree(args: argparse.Namespace, env: Dict[str, str]) -> None:
 
     dataset_json_path = args.nnunet_root / "nnUNet_raw" / f"Dataset{args.dataset_id:03d}_{args.dataset_name}" / "dataset.json"
 
-    # Create temporary directories for the conversion pipeline
     temp_dir = Path(tempfile.mkdtemp(prefix=f"nnunet_tree_{tree_name}_"))
     png_root = temp_dir / "pngs"
     nifti_in_dir = temp_dir / "nifti_in"
@@ -1758,9 +1754,7 @@ def run_predict_tree(args: argparse.Namespace, env: Dict[str, str]) -> None:
             else:
                 prepared_volume = prepared_volume.resolve()
         elif tree_slug == "dub_2":
-            # Default test-volume discovery for the known held-out tree.
             candidate_paths = [
-                PROJECT_ROOT / "BPWoosCLices2" / "dub_2.nii.gz",
                 PROJECT_ROOT / "BPWoodSlices2" / "dub_2.nii.gz",
                 Path.home() / "BPWoosCLices2" / "dub_2.nii.gz",
                 Path.home() / "BPWoodSlices2" / "dub_2.nii.gz",
@@ -2265,10 +2259,8 @@ def main() -> None:
     if args.command == "predict":
         run_predict(args, env)
 
-    # --- NEW: predict-tree trigger ---
     if args.command == "predict-tree":
         run_predict_tree(args, env)
-    # ---------------------------------
 
     if args.command == "custom-train":
         run_custom_train(args, env)

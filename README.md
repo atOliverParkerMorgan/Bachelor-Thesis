@@ -1,10 +1,8 @@
 # Wood Defect Detection in CT Scans
 
-Bachelor thesis project — automatic segmentation of wood defects in CT scans using nnU-Net v2 and a custom SwinUNETR model.
+Bachelor thesis project for automatic wood-defect segmentation in CT scans using nnU-Net v2 and MONAI-based custom models.
 
 **Classes:** Background (0), Healthy Wood (1), Knot (2), Rot (3), Bark (4), Crack (5), Insect Damage (6)
-
----
 
 ## Setup
 
@@ -12,30 +10,28 @@ Bachelor thesis project — automatic segmentation of wood defects in CT scans u
 poetry install
 ```
 
-Place raw ground truth data (ZIP files or folders with DICOM/IMA files) in `src/ground_truth/`.
+Place raw ground-truth data in `src/ground_truth/` as ZIP files or folders with DICOM/IMA files. The tree-specific wrappers expect to be run from the project root.
 
----
-
-## Project structure
+## Project Structure
 
 ```
 src/
-  preprocessing/          # DICOM → PNG → classical segmentation masks → nnU-Net format
-  nn_UNet/                # nnU-Net v2 pipeline wrapper + custom trainer variants
-  custom_model/           # SwinUNETR / MedNexT training pipeline
-  postprocessing/         # Rule-based prediction cleanup
-src/ground_truth/         # raw data — not tracked
-src/nn_UNet/nnunet_data/  # nnU-Net data — not tracked
-output/                   # model checkpoints and results — not tracked
+  preprocessing/          # DICOM → PNG conversion, classical segmentation, Datumaro helpers
+  nn_UNet/                # nnU-Net v2 pipeline, trainer variants, cluster submission helpers
+  custom_model/           # MONAI training, inference, losses, transforms, dataset code
+  postprocessing/         # Rule-based cleanup and analysis utilities
+    unanottated_data/       # Local raw/derived datasets (not tracked)
+run                       # Classical preprocessing entrypoint
+run_nnunet                # nnU-Net / custom-model entrypoint
+run_mednext.sh            # Convenience wrapper for custom-train --model-name mednext
+run_swinunetr.sh          # Convenience wrapper for custom-train --model-name swinunetr
 ```
-
----
 
 ## Workflows
 
-### 1. Classical preprocessing
+### Classical preprocessing
 
-Extracts DICOM slices, converts to PNG, runs classical segmentation, and builds the nnU-Net dataset:
+Extract DICOM slices, convert them to PNG, run classical segmentation, and build the nnU-Net dataset:
 
 ```bash
 ./run
@@ -49,29 +45,27 @@ Useful options:
 ./run --tree dub5 --skip-extract --skip-convert --upload
 ```
 
----
+### nnU-Net pipeline
 
-### 2. nnU-Net pipeline
-
-#### Prepare dataset (convert to nnU-Net format)
+Prepare dataset:
 
 ```bash
 ./run_nnunet prepare --overwrite
 ```
 
-#### Plan and preprocess
+Plan and preprocess:
 
 ```bash
 ./run_nnunet plan --verify-dataset-integrity
 ```
 
-#### Train
+Train:
 
 ```bash
 ./run_nnunet train --configuration 3d_fullres --fold 0
 ```
 
-#### Predict on a tree (NIfTI input → masks → Datumaro ZIP)
+Predict on a tree and export Datumaro:
 
 ```bash
 ./run_nnunet predict-tree \
@@ -82,7 +76,7 @@ Useful options:
     --make-datumaro
 ```
 
-#### Predict from a ZIP
+Predict from a ZIP file:
 
 ```bash
 ./run_nnunet predict \
@@ -91,13 +85,20 @@ Useful options:
     --configuration 3d_fullres --fold 0
 ```
 
----
+### Custom models
 
-### 3. Custom model (SwinUNETR / MedNeXt)
+Supported model names in `custom-train`: `swinunetr` (default), `swinunetr_v2`, `unetr`, `basicunetplusplus`, `mednext`, `segmamba`.
 
-Available models: `swinunetr` (default), `swinunetr_v2`, `mednext`, `segmamba`, `unetr`, `basicunetplusplus`.
+For the common cases, use the wrappers:
 
-#### Train locally
+```bash
+./run_swinunetr.sh --output-dir ./output/swinunetr --epochs 1000 --batch-size 2
+./run_mednext.sh --output-dir ./output/mednext --epochs 1000 --batch-size 2
+```
+
+All `custom-train` flags are still available through `./run_nnunet custom-train ...` if you need a different architecture or a cluster submission.
+
+Train with an explicit dataset split:
 
 ```bash
 ./run_nnunet custom-train \
@@ -117,21 +118,7 @@ Resume from a checkpoint:
 ./run_nnunet custom-train ... --resume-checkpoint ./output/mednext/last_model.pth
 ```
 
-#### Train on cluster (GPU)
-
-```bash
-./run_nnunet custom-train \
-    --model-name mednext \
-    --output-dir ./output/mednext \
-    --epochs 1000 --batch-size 2 --patch-size 128 384 128 \
-    --learning-rate 1e-3 --rare-class-weight 15.0 \
-    --num-workers 4 --grad-accumulation-steps 4 \
-    --wandb --wandb-project "bp-custom-model" \
-    --clusterfit --slurm-partition gpu \
-    --slurm-cpus-per-task 8 --slurm-gpu a100_40 --slurm-time 24:00:00
-```
-
-#### Predict
+Predict with a trained custom model:
 
 ```bash
 ./run_nnunet custom-predict \
@@ -140,29 +127,22 @@ Resume from a checkpoint:
     --output ./predictions/mednext
 ```
 
-Outputs written to `--output-dir`: `best_model.pth`, `last_model.pth`, `metrics_history.csv`, `training_curves.png`, `run_summary.json`.
+Training outputs include `best_model.pth`, `last_model.pth`, `metrics_history.csv`, `training_curves.png`, and `run_summary.json`.
 
----
-
-### 4. Postprocessing
+### Postprocessing
 
 ```bash
-# single file
 poetry run python -m src.postprocessing.postprocess predictions/DUB_4.nii.gz predictions/DUB_4_pp.nii.gz
-
-# whole directory
 poetry run python -m src.postprocessing.postprocess predictions/ predictions_postprocessed/
 ```
 
-Rules applied: rot near crack → crack, crack near bark → background, small background adjacent to rot → rot, enclosed HW/BG holes → filled with surrounding defect.
+Rules applied: rot near crack becomes crack, crack near bark becomes background, small background adjacent to rot becomes rot, and enclosed healthy-wood/background holes are filled with the surrounding defect class.
 
----
+## Cluster
 
-## Cluster (ClusterFIT / Slurm)
+Add `--clusterfit` and the relevant Slurm flags to any command. Recommended GPU: A100 40 GB.
 
-Add `--clusterfit` and Slurm flags to any command. Recommended GPU: A100 40 GB.
-
-### Prepare (CPU)
+### Prepare on CPU
 
 ```bash
 ./run_nnunet prepare --overwrite \
@@ -170,7 +150,7 @@ Add `--clusterfit` and Slurm flags to any command. Recommended GPU: A100 40 GB.
     --slurm-cpus-per-task 16 --slurm-time 02:00:00
 ```
 
-### Plan (CPU)
+### Plan on CPU
 
 ```bash
 ./run_nnunet plan \
@@ -179,7 +159,7 @@ Add `--clusterfit` and Slurm flags to any command. Recommended GPU: A100 40 GB.
     --configurations 3d_fullres
 ```
 
-### Train nnU-Net (GPU)
+### Train nnU-Net on GPU
 
 ```bash
 ./run_nnunet train \
@@ -189,7 +169,7 @@ Add `--clusterfit` and Slurm flags to any command. Recommended GPU: A100 40 GB.
     --initial-lr 1e-3 --compile off --n-proc-da 4 --cpu-threads 1
 ```
 
-### Train custom model (GPU)
+### Train a custom model on GPU
 
 ```bash
 ./run_nnunet custom-train \
@@ -201,7 +181,7 @@ Add `--clusterfit` and Slurm flags to any command. Recommended GPU: A100 40 GB.
     --wandb --wandb-project "bp-custom-model"
 ```
 
-### Predict (GPU)
+### Predict on GPU
 
 ```bash
 ./run_nnunet predict \
@@ -211,20 +191,11 @@ Add `--clusterfit` and Slurm flags to any command. Recommended GPU: A100 40 GB.
     --configuration 3d_fullres --fold 0
 ```
 
----
-
-## Useful one-liners
+## Useful Commands
 
 ```bash
-# Dataset label statistics
 poetry run python src/nn_UNet/label_stats.py --csv stats.csv
-
-# Preview augmentations (writes NIfTI patches for 3D Slicer)
 poetry run python src/custom_model/visualize_augmentation.py
-
-# Fix CVAT z-order for a tree
 poetry run python src/preprocessing/utils/zorder_cvat_fix.py --tree dub4
-
-# NIfTI predictions → Datumaro ZIP (when you already have .nii.gz predictions)
 poetry run python src/preprocessing/conversion/predict2datumaro.py --tree DUB_4
 ```

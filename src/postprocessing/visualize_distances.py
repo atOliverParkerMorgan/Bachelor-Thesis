@@ -47,6 +47,7 @@ def _accumulate_volume(
     sum_dist: np.ndarray,
     counts: np.ndarray,
     min_dist: np.ndarray,
+    max_dist: np.ndarray,
 ) -> None:
     """Add one volume's slice-by-slice distances into the running accumulators."""
     n_slices = volume.shape[2]
@@ -68,31 +69,39 @@ def _accumulate_volume(
                 counts[src, tgt] += d.size
                 if d.min() < min_dist[src, tgt]:
                     min_dist[src, tgt] = d.min()
+                if d.max() > max_dist[src, tgt]:
+                    max_dist[src, tgt] = d.max()
 
 
-def compute_distance_matrix(files: list[Path]) -> tuple[np.ndarray, np.ndarray]:
-    """Return (mean_dist, min_dist) matrices of shape (N, N) aggregated over *files*.
+def compute_distance_matrix(
+    files: list[Path],
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Return (mean_dist, min_dist, max_dist) matrices of shape (N, N).
 
-    Entry [src, tgt] = mean / min 2D distance (voxels) from class *src* voxels
-    to the nearest class *tgt* voxel across all axial slices of all files where
-    both classes appear.  Diagonal is 0.  NaN where classes never co-occur.
+    Entry [src, tgt] = mean / min / max 2D distance (voxels) from class *src*
+    voxels to the nearest class *tgt* voxel, aggregated over all axial slices
+    of all files where both classes co-occur.  Diagonal is 0.  NaN where the
+    pair never co-occurs.
     """
     sum_dist = np.zeros((N, N), dtype=np.float64)
     counts = np.zeros((N, N), dtype=np.int64)
     min_dist = np.full((N, N), np.inf)
+    max_dist = np.full((N, N), -np.inf)
     np.fill_diagonal(min_dist, 0.0)
+    np.fill_diagonal(max_dist, 0.0)
 
     for path in tqdm(files, desc="Files", unit="file"):
         volume = np.asarray(nib.load(path).dataobj).astype(np.uint8)
-        _accumulate_volume(volume, sum_dist, counts, min_dist)
+        _accumulate_volume(volume, sum_dist, counts, min_dist, max_dist)
 
     with np.errstate(invalid="ignore"):
         mean_dist = np.where(counts > 0, sum_dist / counts, np.nan)
 
     np.fill_diagonal(mean_dist, 0.0)
     min_dist[np.isinf(min_dist)] = np.nan
+    max_dist[np.isinf(max_dist)] = np.nan
 
-    return mean_dist, min_dist
+    return mean_dist, min_dist, max_dist
 
 
 def _make_annot(data: np.ndarray) -> np.ndarray:
@@ -109,9 +118,10 @@ def _make_annot(data: np.ndarray) -> np.ndarray:
     return out
 
 
-def _sym_min(mean_dist: np.ndarray) -> np.ndarray:
+def _sym_mean(mean_dist: np.ndarray) -> np.ndarray:
+    """Symmetric mean: (d[A->B] + d[B->A]) / 2.  If one direction is NaN use the other."""
     a, b = mean_dist.copy(), mean_dist.T.copy()
-    return np.where(np.isnan(a), b, np.where(np.isnan(b), a, np.minimum(a, b)))
+    return np.where(np.isnan(a), b, np.where(np.isnan(b), a, (a + b) / 2))
 
 
 def _draw_heatmap(ax, data: np.ndarray, title: str) -> None:
@@ -151,20 +161,20 @@ def _draw_heatmap(ax, data: np.ndarray, title: str) -> None:
 
 
 def plot(mean_dist: np.ndarray, out_path: Path) -> None:
-    sym = _sym_min(mean_dist)
+    sym = _sym_mean(mean_dist)
 
     fig, axes = plt.subplots(1, 2, figsize=(22, 8))
     fig.suptitle("Pairwise class distance matrix", fontsize=16, fontweight="bold", y=1.01)
 
-    _draw_heatmap(axes[0], mean_dist, "Asymmetric mean distance (vx)\n[row = source, col = target]")
+    _draw_heatmap(axes[0], mean_dist, "Asymmetric mean (vx)\n[row = source,  col = target]")
     axes[0].set_xlabel("Target class", fontsize=11)
     axes[0].set_ylabel("Source class", fontsize=11)
 
-    _draw_heatmap(axes[1], sym, "Symmetric min: min(d[A->B], d[B->A]) (vx)")
+    _draw_heatmap(axes[1], sym, "Symmetric mean (vx)\n(d[A→B] + d[B→A]) / 2")
+    axes[1].set_xlabel("Class B", fontsize=11)
+    axes[1].set_ylabel("Class A", fontsize=11)
 
-    legend_patches = [
-        mpatches.Patch(facecolor="#cccccc", label="no co-occurrence in any slice"),
-    ]
+    legend_patches = [mpatches.Patch(facecolor="#cccccc", label="no co-occurrence in any slice")]
     fig.legend(handles=legend_patches, loc="lower center", ncol=1, fontsize=9,
                bbox_to_anchor=(0.5, -0.04), frameon=False)
 
@@ -206,23 +216,29 @@ def main(argv: list[str] | None = None) -> None:
         if not files:
             p.error(f"No *.nii.gz files found in {inp}")
         out = args.out or inp / "distances.png"
+        cache = inp / "distances_mean.npy"
         print(f"Aggregating over {len(files)} files in {inp}")
     else:
         files = [inp]
         stem = inp.name[:-len(".nii.gz")] if inp.name.endswith(".nii.gz") else inp.stem
         out = args.out or inp.parent / f"{stem}_distances.png"
+        cache = inp.parent / f"{stem}_distances_mean.npy"
         print(f"Processing {inp}")
 
-    for f in files:
-        print(f"  {f.name}")
+    if cache.exists() and not files[0].exists():
+        print(f"NIfTI not found — loading cached distances from {cache}")
+        mean_dist = np.load(cache)
+    else:
+        for f in files:
+            print(f"  {f.name}")
+        mean_dist, min_dist, max_dist = compute_distance_matrix(files)
+        np.save(cache, mean_dist)
+        print(f"Cached distances to {cache}")
 
-    mean_dist, _ = compute_distance_matrix(files)
-    sym = _sym_min(mean_dist)
-
-    print("\nMean distance matrix (vx):")
+    print("\nMean distance matrix (vx) — asymmetric, average over co-occurring slices:")
     print(_fmt_matrix(mean_dist))
-    print("\nSymmetric min: min(d[A->B], d[B->A]) (vx):")
-    print(_fmt_matrix(sym))
+    print("\nSymmetric mean (vx) — (d[A->B] + d[B->A]) / 2:")
+    print(_fmt_matrix(_sym_mean(mean_dist)))
 
     plot(mean_dist, out)
 
