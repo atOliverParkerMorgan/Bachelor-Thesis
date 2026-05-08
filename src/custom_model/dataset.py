@@ -106,11 +106,6 @@ class WoodDefectDataset:
         except Exception:
             return frozenset()
 
-    @staticmethod
-    def _has_label(label_path: str, label_idx: int) -> bool:
-        """Return True if the NIfTI label volume contains ``label_idx``."""
-        return label_idx in WoodDefectDataset._get_classes(label_path)
-
     def __len__(self) -> int:
         return len(self.samples)
 

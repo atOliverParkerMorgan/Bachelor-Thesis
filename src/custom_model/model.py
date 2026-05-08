@@ -256,16 +256,3 @@ def get_model(
         "Use one of: swinunetr, swinunetr_v2, unetr, basicunetplusplus, mednext, segmamba."
     )
 
-
-def get_swin_model(
-    num_classes: int = 7,
-    img_size: tuple = (128, 384, 128),
-    dropout_path_rate: float = 0.1,
-):
-    """Backward-compatible alias for get_model('swinunetr', ...)."""
-    return get_model(
-        model_name="swinunetr",
-        num_classes=num_classes,
-        img_size=img_size,
-        dropout_path_rate=dropout_path_rate,
-    )
