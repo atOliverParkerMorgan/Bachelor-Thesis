@@ -9,10 +9,7 @@ from PIL import Image
 from PIL import ImageDraw
 from pathlib import Path
 
-# ==========================================
-# CVAT RGB to nnU-Net Class Mapping
-# ==========================================
-# Assuming custom colormap export is used
+# CVAT RGB → nnU-Net class index (custom colormap export)
 COLOR_MAP = {
     (163, 56, 212): 1,   # Zdravé dřevo  #a338d4
     (214, 149, 170): 0,  # Pozadí        #d695aa  → background

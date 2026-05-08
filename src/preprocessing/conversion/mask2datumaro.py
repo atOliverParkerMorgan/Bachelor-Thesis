@@ -16,7 +16,7 @@ def export_prediction_masks_conversion(
     is_3d: bool = False
 ) -> dict[int, str]:
     """Compatibility wrapper around the shared tree prediction export implementation."""
-    from src.nn_UNet.tree_inference_helpers import export_prediction_masks
+    from src.preprocessing.utils.tree_inference_helpers import export_prediction_masks
 
     return export_prediction_masks(
         prediction_dir=prediction_dir,

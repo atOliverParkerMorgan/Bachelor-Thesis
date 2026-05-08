@@ -75,7 +75,7 @@ def predict2datumaro(
     save_media: bool = True,
     item_id_mode: str = "stem",
 ) -> Path:
-    from src.nn_UNet.tree_inference_helpers import export_prediction_masks
+    from src.preprocessing.utils.tree_inference_helpers import export_prediction_masks
     from src.preprocessing.conversion.mask2datumaro import export_datumaro_dataset
 
     nii_path = _find_nii(predictions_root, tree_name)
