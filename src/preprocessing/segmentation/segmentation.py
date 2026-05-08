@@ -104,7 +104,6 @@ def build_masks(img, requested_masks=None):
     hniloba_mask = None
     dark_combined = None
 
-
     if "trhlina" in requested_masks or "hniloba" in requested_masks or "zdrave_drevo" in requested_masks:
         raw_dark_mask = segment_trhlina(log_img, background_mask)
         raw_dark_mask = cv2.bitwise_and(raw_dark_mask, log_mask)
