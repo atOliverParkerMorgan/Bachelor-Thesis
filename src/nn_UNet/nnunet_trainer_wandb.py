@@ -6,15 +6,11 @@ import os
 import pickle
 from pathlib import Path
 
-import numpy as np
 import torch
 import torch.nn as nn
 
 from nnunetv2.training.nnUNetTrainer.nnUNetTrainer import nnUNetTrainer
 from nnunetv2.training.loss.robust_ce_loss import RobustCrossEntropyLoss
-
-
-# ── helpers used by nnUNetTrainerRareClassBoostWandb ────────────────────────
 
 
 class _RareClassFocusedDataset:
@@ -100,8 +96,6 @@ class _CompoundLoss(nn.Module):
             net_output, target
         )
 
-
-# ── trainers ────────────────────────────────────────────────────────────────
 
 
 class nnUNetTrainerWandb(nnUNetTrainer):
@@ -298,7 +292,6 @@ class nnUNetTrainerLungPretrainedWandb(nnUNetTrainerWandb):
 class nnUNetTrainerRareClassBoostWandb(nnUNetTrainerWandb):
     """Trainer variant that increases sampling and loss emphasis for rare classes."""
 
-    # ── tuneable knobs ─────────────────────────────────────────────────────────
     RARE_LABEL_IDX:         int   = 6     # Poškození hmyzem (dataset.json index)
     CASE_OVERSAMPLE_FACTOR: int   = 8     # extra copies of rare cases per epoch
     CE_RARE_CLASS_WEIGHT:   float = 8.0   # CE loss weight for the rare class
@@ -307,17 +300,8 @@ class nnUNetTrainerRareClassBoostWandb(nnUNetTrainerWandb):
     # More aggressively sample foreground-containing patches (nnUNet built-in)
     oversample_foreground_percent: float = 0.67  # default is 0.33
 
-    # ── dataset setup (overrides nnUNetTrainer.get_tr_and_val_datasets) ────────
-
     def get_tr_and_val_datasets(self):
-        """
-        Build the training/validation datasets via super(), then apply
-        case-level oversampling and the rare-class patch proxy on dataset_tr
-        before the DataLoader is constructed.
-
-        dataset_tr does not exist during initialize() — it is created here
-        inside get_dataloaders() → get_tr_and_val_datasets().
-        """
+        """dataset_tr is created here (not in initialize()) — apply boost before DataLoader."""
         dataset_tr, dataset_val = super().get_tr_and_val_datasets()
         self.dataset_tr = dataset_tr
         self._duplicate_rare_class_cases()
@@ -325,12 +309,7 @@ class nnUNetTrainerRareClassBoostWandb(nnUNetTrainerWandb):
         return self.dataset_tr, dataset_val
 
     def _wrap_dataset_for_rare_class_focus(self) -> None:
-        """
-        Replace self.dataset_tr with a _RareClassFocusedDataset proxy.
-
-        Must be called AFTER _duplicate_rare_class_cases so the boost keys
-        already exist inside the underlying dataset before wrapping.
-        """
+        """Must be called after _duplicate_rare_class_cases — boost keys must exist before wrapping."""
         if not hasattr(self, "dataset_tr") or self.dataset_tr is None:
             self.print_to_log_file(
                 "RareClassBoost: dataset_tr not available — "
@@ -344,8 +323,6 @@ class nnUNetTrainerRareClassBoostWandb(nnUNetTrainerWandb):
             f"RareClassBoost: dataset_tr wrapped with _RareClassFocusedDataset "
             f"— boost-case patches will be centred on label {self.RARE_LABEL_IDX}."
         )
-
-    # ── case oversampling ──────────────────────────────────────────────────────
 
     def _duplicate_rare_class_cases(self) -> None:
 
@@ -401,22 +378,10 @@ class nnUNetTrainerRareClassBoostWandb(nnUNetTrainerWandb):
         with open(pkl_path, "rb") as f:
             return pickle.load(f)
 
-    # ── loss with rare-class amplification ────────────────────────────────────
-
     def _build_loss(self):
-        """
-        Build standard DC+CE loss, then apply two rare-class amplifications:
-
-             1. Replace the CE module with a class-weighted version so
-             mis-classifying a rare-class voxel costs proportionally more.
-
-          2. Wrap in _CompoundLoss, adding an auxiliary _RareClassBinaryDice
-                 term that directly optimises the per-class Dice score
-               for Poškození hmyzem on top of the standard DC+CE signal.
-        """
+        """Add rare-class CE weight and auxiliary binary Dice term to the base DC+CE loss."""
         loss = super()._build_loss()
 
-        # ── inject CE class weight ─────────────────────────────────────────────
         # super() may return a DeepSupervisionWrapper; the inner DC_and_CE_loss
         # is stored at loss.loss by DeepSupervisionWrapper.
         dc_ce = getattr(loss, "loss", loss)
@@ -448,7 +413,6 @@ class nnUNetTrainerRareClassBoostWandb(nnUNetTrainerWandb):
                     f"of range (n_classes={n_classes}) — CE weight not applied."
                 )
 
-        # ── auxiliary binary Dice for the rare class ───────────────────────────
         aux_dice = _RareClassBinaryDice(self.RARE_LABEL_IDX)
         loss     = _CompoundLoss(loss, aux_dice, self.RARE_DICE_AUX_WEIGHT)
         self.print_to_log_file(

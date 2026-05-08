@@ -94,8 +94,7 @@ def _load_fold_split(
     dataset: WoodDefectDataset,
 ) -> tuple[list, list]:
     """Load train/val split from splits_final.json by fold index.
-    
-    Maps case IDs in the split to actual dataset entries.
+
     Handles both direct case names (DUB_1_part0) and nnUNet naming (_0000 suffix).
     """
     with open(splits_json) as f:
@@ -149,12 +148,9 @@ def _stratified_split(
     val_fraction: float,
     seed: int,
 ) -> tuple[list, list]:
-    """Split unique base cases ensuring every class that appears in ≥2 volumes
-    is represented in both train and val.  Classes found in only one volume
-    stay in training (maximises learning signal).
+    """Stratified split ensuring classes with ≥2 volumes appear in both train and val.
 
-    The split is done on ``cases`` BEFORE oversampling so that duplicate
-    entries from rare-class boosting never cross the train/val boundary.
+    Split before oversampling so rare-class duplicates never cross the boundary.
     """
     if len(cases) < 2:
         raise ValueError("Need at least two volumes to create a train/validation split.")
@@ -220,11 +216,7 @@ def _compute_train_intensity_stats(
     clip_min: float,
     clip_max: float,
 ) -> tuple[float, float]:
-    """Compute global mean/std from training images only.
-
-    The statistics are computed on intensities clipped to [clip_min, clip_max]
-    and then reused for both training and validation transforms.
-    """
+    """Compute global mean/std from training images only (clipped to [clip_min, clip_max])."""
     if not train_cases:
         raise ValueError("Cannot compute normalization stats from an empty training split.")
 
@@ -328,32 +320,89 @@ def _plot_history(history: list[dict[str, Any]], output_dir: Path) -> None:
         print("WARNING: matplotlib is not installed. Skipping training curve plots.")
         return
 
-    epochs = [int(row["epoch"]) for row in history]
-    train_loss = [float(row["train_loss"]) for row in history]
-    val_loss = [float(row["val_loss"]) for row in history]
-    train_dice = [float(row["train_mean_dice"]) for row in history]
-    val_dice = [float(row["val_mean_dice"]) for row in history]
-    learning_rate = [float(row["learning_rate"]) for row in history]
+    def _series(value_key: str) -> tuple[list[int], list[float]]:
+        series_epochs: list[int] = []
+        series_values: list[float] = []
+        for row in history:
+            value = row.get(value_key)
+            if value is None:
+                continue
+            series_epochs.append(int(row["epoch"]))
+            series_values.append(float(value))
+        return series_epochs, series_values
+
+    train_loss_epochs, train_loss = _series("train_loss")
+    val_loss_epochs, val_loss = _series("val_loss")
+    train_dice_epochs, train_dice = _series("train_mean_dice")
+    learning_rate_epochs, learning_rate = _series("learning_rate")
+
+    val_dice_epochs: list[int] = []
+    val_dice: list[float] = []
+    ema_epochs: list[int] = []
+    ema_dice: list[float] = []
+    # Support both the new key name and the legacy key for EMA pseudo-dice.
+    ema_new_key = "ema_pseuado_dice"  # user-requested name (keeps their spelling)
+    ema_old_key = "best_ema_pseudo_dice"
+    for row in history:
+        epoch = int(row["epoch"])
+        pseudo_dice = row.get("val_pseudo_dice")
+        if pseudo_dice:
+            val_dice_epochs.append(epoch)
+            val_dice.append(float(sum(pseudo_dice) / len(pseudo_dice)))
+        elif row.get("val_mean_dice") is not None:
+            val_dice_epochs.append(epoch)
+            val_dice.append(float(row["val_mean_dice"]))
+
+        ema_value = None
+        if row.get(ema_new_key) is not None:
+            ema_value = row.get(ema_new_key)
+        elif row.get(ema_old_key) is not None:
+            ema_value = row.get(ema_old_key)
+
+        if ema_value is not None:
+            ema_epochs.append(epoch)
+            ema_dice.append(float(ema_value))
+
+    # forward-fill EMA values so the EMA curve spans the same epochs as val_pseudo_dice
+    ema_aligned: list[float] = []
+    if ema_epochs:
+        ema_map = {e: v for e, v in zip(ema_epochs, ema_dice)}
+        sorted_ema_epochs = sorted(ema_epochs)
+        first_ema_epoch = sorted_ema_epochs[0]
+        last_ema_epoch = sorted_ema_epochs[-1]
+        last_val = ema_map[first_ema_epoch]
+        for e in val_dice_epochs:
+            if e in ema_map:
+                last_val = ema_map[e]
+            else:
+                if e < first_ema_epoch:
+                    last_val = ema_map[first_ema_epoch]
+                elif e > last_ema_epoch:
+                    last_val = ema_map[last_ema_epoch]
+            ema_aligned.append(float(last_val))
 
     fig, axes = plt.subplots(1, 3, figsize=(18, 5))
 
-    axes[0].plot(epochs, train_loss, label="train_loss", color="tab:blue")
-    axes[0].plot(epochs, val_loss, label="val_loss", color="tab:orange")
+    axes[0].plot(train_loss_epochs, train_loss, label="train_loss", color="tab:blue")
+    axes[0].plot(val_loss_epochs, val_loss, label="val_loss", color="tab:orange")
     axes[0].set_title("Loss")
     axes[0].set_xlabel("Epoch")
     axes[0].set_ylabel("Loss")
     axes[0].grid(True, alpha=0.3)
     axes[0].legend()
 
-    axes[1].plot(epochs, train_dice, label="train_mean_dice", color="tab:green")
-    axes[1].plot(epochs, val_dice, label="val_mean_dice", color="tab:red")
+    if train_dice_epochs:
+        axes[1].plot(train_dice_epochs, train_dice, color="tab:green")
+    axes[1].plot(val_dice_epochs, val_dice, label="val_pseudo_dice", color="tab:red")
+    if ema_aligned:
+        axes[1].plot(val_dice_epochs, ema_aligned, label="ema_pseuado_dice", color="tab:blue", linestyle="--")
     axes[1].set_title("Dice")
     axes[1].set_xlabel("Epoch")
     axes[1].set_ylabel("Score")
     axes[1].grid(True, alpha=0.3)
     axes[1].legend()
 
-    axes[2].plot(epochs, learning_rate, label="learning_rate", color="tab:purple")
+    axes[2].plot(learning_rate_epochs, learning_rate, label="learning_rate", color="tab:purple")
     axes[2].set_title("Learning Rate")
     axes[2].set_xlabel("Epoch")
     axes[2].set_ylabel("LR")
@@ -367,12 +416,7 @@ def _plot_history(history: list[dict[str, Any]], output_dir: Path) -> None:
 
 
 def _select_primary_output(prediction: Any) -> torch.Tensor:
-    """Return a tensor from model output across MONAI output variants.
-
-    Some architectures/versions can emit list/tuple outputs (deep supervision).
-    Loss and metric code below expect a tensor, so we consistently take the
-    first prediction tensor.
-    """
+    """Extract the primary tensor from model output (handles deep supervision lists)."""
     if isinstance(prediction, torch.Tensor):
         return prediction
     if isinstance(prediction, (list, tuple)):

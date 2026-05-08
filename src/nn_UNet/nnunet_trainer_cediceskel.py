@@ -11,10 +11,6 @@ from scipy.ndimage import zoom as nd_zoom
 from nnunetv2.training.nnUNetTrainer.nnUNetTrainer import nnUNetTrainer
 
 
-# ---------------------------------------------------------------------------
-# Skeleton Recall Loss (inlined — file is copied to nnunetv2 package dir)
-# ---------------------------------------------------------------------------
-
 class _SkeletonRecallLoss(nn.Module):
     """1 - mean skeleton recall over foreground classes."""
 
@@ -102,10 +98,6 @@ class _SkeletonRecallLoss(nn.Module):
         return 1.0 - recall.mean()
 
 
-# ---------------------------------------------------------------------------
-# Wrapper: adds skeleton recall on top of any nnUNet compound loss
-# ---------------------------------------------------------------------------
-
 class _SkelAugmentedLoss(nn.Module):
     """Wrapper that adds skeleton recall loss to any base loss."""
 
@@ -141,10 +133,6 @@ class _SkelAugmentedLoss(nn.Module):
         skel = self.skel(primary_out, primary_tgt)
         return base + self.lambda_skel * skel
 
-
-# ---------------------------------------------------------------------------
-# Custom trainer
-# ---------------------------------------------------------------------------
 
 class nnUNetTrainerCeDiceSkel(nnUNetTrainer):
     """nnU-Net trainer with CE, Dice, and skeleton recall loss."""
