@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """CLI for rule-based postprocessing of wood-defect segmentation predictions.
 
-Applies two spatial rules to a nnU-Net / MedNext / SwinUNETR NIfTI prediction:
+Applies four spatial rules to a nnU-Net / MedNext / SwinUNETR NIfTI prediction:
 
   Rule 1 – Rot → Crack
       Any rot connected component whose closest voxel is within
@@ -14,6 +14,11 @@ Applies two spatial rules to a nnU-Net / MedNext / SwinUNETR NIfTI prediction:
   Rule 3 – Background → Rot
       Any background connected component smaller than --bg-max-size voxels that
       is directly adjacent to rot is relabelled as rot.
+
+  Rule 4 – Enclosed HW/BG → Defect
+      Healthy-wood or background holes enclosed by a single defect class
+      (per axial slice) and smaller than --enclosed-max-hole-size voxels are
+      filled with that defect label.
 
 Usage – single file::
 
