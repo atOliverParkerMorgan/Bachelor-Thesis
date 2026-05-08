@@ -4,6 +4,35 @@ Bachelor thesis project for automatic wood-defect segmentation in CT scans using
 
 **Classes:** Background (0), Healthy Wood (1), Knot (2), Rot (3), Bark (4), Crack (5), Insect Damage (6)
 
+## Challenging CT Slices
+
+| | |
+|--|--|
+| ![Challenge A](images/challenge_knot_rot_boundary.png) | ![Challenge B](images/challenge_crack_rot.png) |
+| Incomplete bark and a vague boundary between the knot and the surrounding healthy wood. | Incomplete bark, a thin crack and a thicker crack, and an elongated rot region. |
+
+| | |
+|--|--|
+| ![Challenge C](images/challenge_thin_crack.png) | ![Challenge D](images/challenge_bark_boundary.png) |
+| A thin crack and a thin elongated rot region. | Vague boundary between knot and rot. |
+
+## Qualitative Prediction Examples
+
+| Ground truth | Prediction |
+|--|--|
+| ![Row 5 Ground Truth](images/pred5gt.png) | ![Row 5 Prediction](images/pred5.png) |
+| Ground truth: Healthy wood, Bark, Crack, Knot, Insect damage | Accurate: Bark, Crack, Insect damage; Inaccurate: Healthy wood, Knot |
+
+| Ground truth | Prediction |
+|--|--|
+| ![Row 6 Ground Truth](images/pred6gt.png) | ![Row 6 Prediction](images/pred6.png) |
+| Ground truth: Healthy wood, Bark, Crack, Knot, Insect damage | Accurate: Bark, Crack, Insect damage; Inaccurate: Healthy wood, Knot, Rot |
+
+| Ground truth | Prediction |
+|--|--|
+| ![Long Example Ground Truth](images/long_pred2gt.png) | ![Long Example Prediction](images/long_pred2.png) |
+| Ground truth: Healthy wood, Bark, Knot, Rot | Accurate: Knot, Rot; Inaccurate: Healthy wood, Bark |
+
 ## Setup
 
 ```bash
@@ -27,7 +56,7 @@ src/
   nn_UNet/         nnU-Net v2 pipeline, trainer variants, cluster submission helpers
   custom_model/    MONAI training, inference, losses, transforms, dataset code
   postprocessing/  Rule-based cleanup and analysis utilities
-  unanottated_data/ Local raw and derived datasets (not tracked)
+  unannotated_data/ Local raw and derived datasets (not tracked)
 ```
 
 ## Classical Preprocessing
@@ -140,16 +169,13 @@ Resume from a checkpoint:
 ./run custom-train ... --resume-checkpoint ./output/mednext/last_model.pth
 ```
 
-Predict with a trained custom model:
-
-```bash
-./run custom-predict \
-    --model-dir ./output/mednext \
-    --input ./src/ground_truth/DUB_4.zip \
-    --output ./predictions/mednext
-```
-
 Training outputs include `best_model.pth`, `last_model.pth`, `metrics_history.csv`, `training_curves.png`, and `run_summary.json`.
+
+### Model comparison
+
+| | nnU-Net | MedNeXt | SwinUNETR |
+|--|--|--|--|
+| Prediction | ![nnU-Net](images/pred_nnUnet.png) | ![MedNeXt](images/pred_mednext.png) | ![SwinUNETR](images/pred_swinunetr.png) |
 
 ## Postprocessing
 
@@ -159,6 +185,10 @@ poetry run python -m src.postprocessing.postprocess predictions/ predictions_pos
 ```
 
 Rules applied: rot near crack becomes crack, crack near bark becomes background, small background adjacent to rot becomes rot, and enclosed healthy-wood/background holes are filled with the surrounding defect class.
+
+| Before | After |
+|--------|-------|
+| ![Before](images/pp_rot_crack_before.png) | ![After](images/pp_rot_crack_after.png) |
 
 ## Cluster
 
@@ -216,8 +246,6 @@ Add `--clusterfit` and the relevant Slurm flags to any command. Recommended GPU:
 ## Useful Commands
 
 ```bash
-poetry run python src/nn_UNet/label_stats.py --csv stats.csv
-poetry run python src/custom_model/visualize_augmentation.py
 poetry run python src/preprocessing/utils/zorder_cvat_fix.py --tree dub4
 poetry run python src/preprocessing/conversion/predict2datumaro.py --tree DUB_4
 ```
