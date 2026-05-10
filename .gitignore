@@ -49,6 +49,8 @@ temp_*/
 *.npz
 *.pth
 Task006_Lung.zip
+!images/
+!images/*.png
 
 # Generated files
 splits_final.json
