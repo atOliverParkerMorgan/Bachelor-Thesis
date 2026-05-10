@@ -1,5 +1,5 @@
 [tool.poetry]
-name = "ima-to-png-converter"
+name = "wood-defect-detection"
 version = "0.1.0"
 description = "Convert IMA medical imaging files to PNG format"
 authors = ["Your Name <you@example.com>"]
