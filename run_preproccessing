@@ -378,7 +378,7 @@ if [ "$UPLOAD" = true ]; then
             upload_args+=(--job-id "$UPLOAD_JOB_ID")
         fi
 
-        poetry run python src/implementation/preprocessing/upload_to_cvat.py "${upload_args[@]}" 2>/dev/null || {
+        poetry run python src/implementation/preprocessing/utils/upload_to_cvat.py "${upload_args[@]}" 2>/dev/null || {
             echo -e "${RED}✗ CVAT upload failed${NC}"
             exit 1
         }
