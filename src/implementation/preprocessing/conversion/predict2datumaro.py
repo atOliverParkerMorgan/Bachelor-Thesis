@@ -3,12 +3,12 @@
 
 Replaces the two-step manual workflow::
 
-    poetry run python src/preprocessing/conversion/nii2mask.py --tree dub_4
-    poetry run python src/preprocessing/conversion/mask2datumaro.py ...
+    poetry run python src/implementation/preprocessing/conversion/nii2mask.py --tree dub_4
+    poetry run python src/implementation/preprocessing/conversion/mask2datumaro.py ...
 
 Usage example::
 
-    poetry run python src/preprocessing/conversion/predict2datumaro.py --tree DUB_4
+    poetry run python src/implementation/preprocessing/conversion/predict2datumaro.py --tree DUB_4
 
 The script reads the raw NIfTI label volume produced by nnU-Net, builds
 per-class binary mask PNGs using the dataset.json label map, then exports a
@@ -23,9 +23,9 @@ import sys
 import tempfile
 from pathlib import Path
 
-DEFAULT_PREDICTIONS_ROOT = Path("src/nn_UNet/predictions")
+DEFAULT_PREDICTIONS_ROOT = Path("src/implementation/nn_UNet/predictions")
 DEFAULT_DATASET_JSON = Path(
-    "src/nn_UNet/nnunet_data/nnUNet_raw/Dataset001_BPWoodDefects/dataset.json"
+    "src/implementation/nn_UNet/nnunet_data/nnUNet_raw/Dataset001_BPWoodDefects/dataset.json"
 )
 
 
@@ -75,8 +75,8 @@ def predict2datumaro(
     save_media: bool = True,
     item_id_mode: str = "stem",
 ) -> Path:
-    from src.preprocessing.utils.tree_inference_helpers import export_prediction_masks
-    from src.preprocessing.conversion.mask2datumaro import export_datumaro_dataset
+    from src.implementation.preprocessing.utils.tree_inference_helpers import export_prediction_masks
+    from src.implementation.preprocessing.conversion.mask2datumaro import export_datumaro_dataset
 
     nii_path = _find_nii(predictions_root, tree_name)
     resolved_images_dir = _find_images_dir(predictions_root, tree_name, images_dir)

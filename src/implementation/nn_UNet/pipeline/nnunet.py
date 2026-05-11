@@ -69,7 +69,7 @@ def build_holdout_split(
 
 
 def run_prepare(args) -> None:
-    from src.preprocessing.conversion.segmask2ima import process_tree
+    from src.implementation.preprocessing.conversion.segmask2ima import process_tree
 
     zip_files = list(args.source.glob("*.zip"))
     if not zip_files:
@@ -262,7 +262,7 @@ def run_predict(args, env: Dict[str, str]) -> None:
 
 
 def run_predict_tree(args, env: Dict[str, str]) -> None:
-    from src.preprocessing.utils.tree_inference_helpers import (
+    from src.implementation.preprocessing.utils.tree_inference_helpers import (
         prepare_png_tree_from_ground_truth,
         write_tree_inference_nifti,
         export_prediction_masks,
@@ -353,7 +353,7 @@ def run_predict_tree(args, env: Dict[str, str]) -> None:
                 log(f"Predicting chunk: {chunk_nifti.stem.replace('_0000', '')}")
                 run_cmd(chunk_cmd, env, f"predict-tree:{chunk_nifti.stem}")
                 shutil.rmtree(chunk_in_dir)
-            from src.preprocessing.utils.tree_inference_helpers import merge_prediction_chunks
+            from src.implementation.preprocessing.utils.tree_inference_helpers import merge_prediction_chunks
             merge_prediction_chunks(nifti_out_dir, tree_name)
             log("Prediction chunks merged.")
         else:

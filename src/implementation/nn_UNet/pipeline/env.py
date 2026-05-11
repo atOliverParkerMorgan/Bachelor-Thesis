@@ -6,7 +6,7 @@ import time
 from pathlib import Path
 from typing import Dict
 
-# _env.py is at src/nn_UNet/pipeline/_env.py; parents[3] is the project root.
+# _env.py is at src/implementation/nn_UNet/pipeline/_env.py; parents[3] is the project root.
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 
 DEFAULT_PLANNER = "nnUNetPlannerResEncL"
@@ -36,12 +36,12 @@ CHECKPOINT_CANDIDATES = [
     "checkpoint_latest.pth",
 ]
 
-DEFAULT_NNUNET_ROOT = Path("src/nn_UNet/nnunet_data")
+DEFAULT_NNUNET_ROOT = Path("src/implementation/nn_UNet/nnunet_data")
 
 
 def import_clusterfit_helpers():
     try:
-        from src.nn_UNet.clusterfit_utils import (
+        from src.implementation.nn_UNet.clusterfit_utils import (
             SlurmJobSubmitter,
             add_clusterfit_arguments,
             build_slurm_config_from_args,

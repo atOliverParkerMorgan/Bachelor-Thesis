@@ -53,8 +53,8 @@ Place raw data in `src/ground_truth/` as ZIP files or folders containing DICOM /
 ```text
 src/
   preprocessing/   DICOM -> PNG conversion, classical segmentation, Datumaro helpers
-  nn_UNet/         nnU-Net v2 pipeline, trainer variants, cluster submission helpers
-  custom_model/    MONAI training, inference, losses, transforms, dataset code
+    nn_UNet/         nnU-Net v2 pipeline, trainer variants, cluster submission helpers (moved to `src/implementation/nn_UNet`)
+    custom_model/    MONAI training, inference, losses, transforms, dataset code (moved to `src/implementation/custom_model`)
   postprocessing/  Rule-based cleanup and analysis utilities
   unannotated_data/ Local raw and derived datasets (not tracked)
 ```
@@ -79,7 +79,7 @@ The script name keeps the original `preproccessing` spelling.
 
 ## nnU-Net and Custom Models
 
-The `./run` entrypoint forwards to `src.nn_UNet.pipeline` and supports:
+The `./run` entrypoint forwards to `src.implementation.nn_UNet.pipeline` and supports:
 
 - `prepare`
 - `plan`
@@ -154,8 +154,8 @@ Train with an explicit dataset split:
 ```bash
 ./run custom-train \
     --model-name mednext \
-    --image-dir ./src/nn_UNet/nnunet_data/nnUNet_raw/Dataset002_BPWoodDefectsSplit/imagesTr \
-    --label-dir ./src/nn_UNet/nnunet_data/nnUNet_raw/Dataset002_BPWoodDefectsSplit/labelsTr \
+    --image-dir ./src/implementation/nn_UNet/nnunet_data/nnUNet_raw/Dataset002_BPWoodDefectsSplit/imagesTr \
+    --label-dir ./src/implementation/nn_UNet/nnunet_data/nnUNet_raw/Dataset002_BPWoodDefectsSplit/labelsTr \
     --output-dir ./output/mednext \
     --epochs 1000 --batch-size 2 --patch-size 128 384 128 \
     --learning-rate 1e-3 --rare-class-weight 15.0 \
@@ -180,8 +180,8 @@ Training outputs include `best_model.pth`, `last_model.pth`, `metrics_history.cs
 ## Postprocessing
 
 ```bash
-poetry run python -m src.postprocessing.postprocess predictions/DUB_4.nii.gz predictions/DUB_4_pp.nii.gz
-poetry run python -m src.postprocessing.postprocess predictions/ predictions_postprocessed/
+poetry run python -m src.implementation.postprocessing.postprocess predictions/DUB_4.nii.gz predictions/DUB_4_pp.nii.gz
+poetry run python -m src.implementation.postprocessing.postprocess predictions/ predictions_postprocessed/
 ```
 
 Rules applied: rot near crack becomes crack, crack near bark becomes background, small background adjacent to rot becomes rot, and enclosed healthy-wood/background holes are filled with the surrounding defect class.
@@ -246,6 +246,6 @@ Add `--clusterfit` and the relevant Slurm flags to any command. Recommended GPU:
 ## Useful Commands
 
 ```bash
-poetry run python src/preprocessing/utils/zorder_cvat_fix.py --tree dub4
-poetry run python src/preprocessing/conversion/predict2datumaro.py --tree DUB_4
+poetry run python src/implementation/preprocessing/utils/zorder_cvat_fix.py --tree dub4
+poetry run python src/implementation/preprocessing/conversion/predict2datumaro.py --tree DUB_4
 ```

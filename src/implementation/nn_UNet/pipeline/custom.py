@@ -31,7 +31,7 @@ def run_custom_train(args, env: Dict[str, str]) -> None:
         log(f"Test mode: fold=0, splits_json={split_path}")
 
     cmd = [
-        sys.executable, "-m", "src.custom_model.train",
+        sys.executable, "-m", "src.implementation.custom_model.train",
         "--image-dir", str(image_dir),
         "--label-dir", str(label_dir),
         "--output-dir", str(args.output_dir),
@@ -100,8 +100,8 @@ def run_custom_predict(args, env: Dict[str, str]) -> None:
     from nibabel.orientations import io_orientation, axcodes2ornt, ornt_transform, apply_orientation
     import torch
     from monai.inferers import sliding_window_inference
-    from src.custom_model.model import get_model
-    from src.custom_model.transforms import get_inference_transforms
+    from src.implementation.custom_model.model import get_model
+    from src.implementation.custom_model.transforms import get_inference_transforms
 
     model_dir = Path(args.model_dir)
     with open(model_dir / "config.json", "r", encoding="utf-8") as f:

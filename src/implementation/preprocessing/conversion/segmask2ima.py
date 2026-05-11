@@ -189,7 +189,7 @@ def process_tree(tree_name):
     if not os.path.exists(cvat_masks_dir):
         cvat_masks_dir = f"src/cvat_exports/cvat/{tree_lower}/SegmentationClass"
     cvat_annotations_xml = f"src/cvat_exports/cvat/{tree_lower}/annotations_fixed.xml"
-    nnunet_raw_dir = "src/nn_UNet/nnunet_data/nnUNet_raw/Dataset001_BPWoodDefects/" 
+    nnunet_raw_dir = "src/implementation/nn_UNet/nnunet_data/nnUNet_raw/Dataset001_BPWoodDefects/" 
     case_identifier = tree_lower 
 
     # 1. Extraction

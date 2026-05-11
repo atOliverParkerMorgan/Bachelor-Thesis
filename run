@@ -9,7 +9,7 @@ fi
 START_TS=$(date +%s)
 echo "[run] Starting: $*"
 
-poetry run python -m src.nn_UNet.pipeline "$@"
+poetry run python -m src.implementation.nn_UNet.pipeline "$@"
 
 END_TS=$(date +%s)
 ELAPSED=$((END_TS - START_TS))

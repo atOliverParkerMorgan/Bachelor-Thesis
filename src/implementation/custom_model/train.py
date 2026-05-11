@@ -21,10 +21,10 @@ from monai.inferers import sliding_window_inference
 from monai.metrics import DiceMetric
 from monai.transforms import AsDiscrete
 
-from src.custom_model.dataset import WoodDefectDataset
-from src.custom_model.losses import get_loss
-from src.custom_model.model import get_model
-from src.custom_model.transforms import get_train_transforms, get_val_transforms
+from src.implementation.custom_model.dataset import WoodDefectDataset
+from src.implementation.custom_model.losses import get_loss
+from src.implementation.custom_model.model import get_model
+from src.implementation.custom_model.transforms import get_train_transforms, get_val_transforms
 
 
 @dataclass

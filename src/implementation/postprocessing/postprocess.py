@@ -22,13 +22,13 @@ Applies four spatial rules to a nnU-Net / MedNext / SwinUNETR NIfTI prediction:
 
 Usage – single file::
 
-    poetry run python -m src.postprocessing.postprocess \\
+    poetry run python -m src.implementation.postprocessing.postprocess \\
         path/to/pred.nii.gz path/to/pred_pp.nii.gz
 
 Usage – whole directory (processes every *.nii.gz)::
 
-    poetry run python -m src.postprocessing.postprocess \\
-        src/nn_UNet/predictions/ src/nn_UNet/predictions_postprocessed/
+    poetry run python -m src.implementation.postprocessing.postprocess \\
+        src/implementation/nn_UNet/predictions/ src/implementation/nn_UNet/predictions_postprocessed/
 
 All distance parameters are in voxels (isotropic assumption).
 """
@@ -42,7 +42,7 @@ from pathlib import Path
 import nibabel as nib
 import numpy as np
 
-from src.postprocessing.rules import postprocess
+from src.implementation.postprocessing.rules import postprocess
 
 
 def _process_file(

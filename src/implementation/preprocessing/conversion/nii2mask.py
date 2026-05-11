@@ -10,8 +10,8 @@ from pathlib import Path
 from tqdm import tqdm
 
 # --- Configuration ---
-DEFAULT_INPUT = "src/nn_UNet/predictions/"
-DEFAULT_OUTPUT = "src/nn_UNet/predictions/mask"
+DEFAULT_INPUT = "src/implementation/nn_UNet/predictions/"
+DEFAULT_OUTPUT = "src/implementation/nn_UNet/predictions/mask"
 DEFAULT_TREE = "dub_4"
 
 # nnU-Net class index mapping (per dataset.json):

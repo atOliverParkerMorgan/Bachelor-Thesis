@@ -9,10 +9,10 @@ import numpy as np
 import SimpleITK as sitk
 from PIL import Image
 
-from src.nn_UNet.pipeline.env import PROJECT_ROOT, log
-from src.preprocessing.conversion.ima2png import process_series as convert_dicom_series_to_png
-from src.preprocessing.conversion.mask2datumaro import export_datumaro_dataset
-from src.preprocessing.conversion.png2ima import get_3d_direction
+from src.implementation.nn_UNet.pipeline.env import PROJECT_ROOT, log
+from src.implementation.preprocessing.conversion.ima2png import process_series as convert_dicom_series_to_png
+from src.implementation.preprocessing.conversion.mask2datumaro import export_datumaro_dataset
+from src.implementation.preprocessing.conversion.png2ima import get_3d_direction
 
 
 def _tree_slug(tree_name: str) -> str:

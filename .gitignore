@@ -71,9 +71,9 @@ src/ground_truth/
 src/png/
 src/output/
 src/cvat_exports/
-src/custom_model/results/
-src/nn_UNet/predictions/
-src/nn_UNet/nnunet_data/
+src/implementation/custom_model/results/
+src/implementation/nn_UNet/predictions/
+src/implementation/nn_UNet/nnunet_data/
 
 # Jupyter
 .ipynb_checkpoints/
