@@ -171,12 +171,6 @@ Resume from a checkpoint:
 
 Training outputs include `best_model.pth`, `last_model.pth`, `metrics_history.csv`, `training_curves.png`, and `run_summary.json`.
 
-### Model comparison
-
-| | nnU-Net | MedNeXt | SwinUNETR |
-|--|--|--|--|
-| Prediction | ![nnU-Net](images/pred_nnUnet.png) | ![MedNeXt](images/pred_mednext.png) | ![SwinUNETR](images/pred_swinunetr.png) |
-
 ## Postprocessing
 
 ```bash
@@ -185,10 +179,6 @@ poetry run python -m src.implementation.postprocessing.postprocess predictions/ 
 ```
 
 Rules applied: rot near crack becomes crack, crack near bark becomes background, small background adjacent to rot becomes rot, and enclosed healthy-wood/background holes are filled with the surrounding defect class.
-
-| Before | After |
-|--------|-------|
-| ![Before](images/pp_rot_crack_before.png) | ![After](images/pp_rot_crack_after.png) |
 
 ## Cluster
 
