@@ -35,7 +35,7 @@ def submit_to_clusterfit(args, env: Dict[str, str]) -> None:
 
     # Use -m so the command works from a package directory, not a single file path.
     safe_args = [a for a in sys.argv[1:] if a != "--clusterfit"]
-    cmd = [sys.executable, "-m", "src.nn_UNet.pipeline"] + safe_args
+    cmd = [sys.executable, "-m", "src.implementation.nn_UNet.pipeline"] + safe_args
 
     script_content = SlurmJobSubmitter.build_slurm_script(
         job_command=cmd,

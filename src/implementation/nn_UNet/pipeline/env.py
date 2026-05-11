@@ -6,8 +6,8 @@ import time
 from pathlib import Path
 from typing import Dict
 
-# _env.py is at src/implementation/nn_UNet/pipeline/_env.py; parents[3] is the project root.
-PROJECT_ROOT = Path(__file__).resolve().parents[3]
+# env.py is at src/implementation/nn_UNet/pipeline/env.py; parents[4] is the project root.
+PROJECT_ROOT = Path(__file__).resolve().parents[4]
 
 DEFAULT_PLANNER = "nnUNetPlannerResEncL"
 
